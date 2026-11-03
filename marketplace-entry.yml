@@ -1,0 +1,6 @@
+url: https://github.com/gpta76/dsh-github-panel
+name: gpta76/dsh-github-panel
+category: git
+description:
+  en: 'GitHub console inside DSH: token sign-in, repositories, issues, pull requests, commits, notifications, stars and activity, cloning with auto-sync, and installing skills from GitHub.'
+  zh: 'DSH 内的 GitHub 控制台：令牌登录后查看仓库、议题、拉取请求、提交、通知、星标与动态，克隆仓库并自动同步，也能从 GitHub 安装技能。'
