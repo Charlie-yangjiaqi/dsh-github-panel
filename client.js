@@ -53,6 +53,15 @@ window.__ModuleLoader__.load({
       skillsLoading: false,
       skillsError: null,
       skillForm: { repo: '', dir: '', ref: '', busy: false, error: null },
+      projects: null,
+      projectCategories: [],
+      projectsLoading: false,
+      projectsError: null,
+      skillsUpdating: false,
+      skillCategory: 'all',
+      openProjects: {},
+      projectBusy: {},
+      projectNotice: null,
       clones: null,
       cloneRoot: '',
       cloneGit: null,
@@ -721,10 +730,578 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /* 旧宿主没有 /skills/projects 路由时，界面自己按仓库把技能聚合成项目：
+       分类和关键词用同一张表在浏览器里算，安装/卸载退回已有的单技能路由。 */
+
+    const LOCAL_CATEGORIES = [
+      { id: 'drama', label: '漫剧', words: ['短剧', '漫剧', '剧本', '分镜', '台词', '人物', '角色', '场景', '小说', 'storyboard', 'drama', 'script', 'screenplay', 'novel', 'character', 'shot'] },
+      { id: 'image', label: '图像设计', words: ['图像', '设计', '海报', '出图', '美术', '插画', '视觉', '排版', 'poster', 'design', 'image', 'png', 'pdf', 'svg', 'logo', 'illustration', 'art'] },
+      { id: 'video', label: '视频音频', words: ['视频', '剪辑', '配音', '音频', '字幕', 'video', 'audio', 'voice', 'tts', 'subtitle', 'clip'] },
+      { id: 'dev', label: '开发工具', words: ['代码', '开发', '插件', '重构', '部署', '测试', '评测', 'code', 'dev', 'plugin', 'refactor', 'deploy', 'api', 'cli', 'sdk', 'prompt', 'skill.md'] },
+      { id: 'docs', label: '文档办公', words: ['文档', '办公', '表格', '简历', '报告', 'ppt', 'doc', 'office', 'sheet', 'word', 'excel', 'resume', 'report'] },
+      { id: 'data', label: '数据分析', words: ['数据', '分析', '统计', '报表', '爬虫', 'data', 'analysis', 'sql', 'chart', 'scrape'] },
+      { id: 'auto', label: '自动化', words: ['自动化', '智能体', '工作流', '定时', 'agent', 'automation', 'workflow', 'mcp', 'bot'] },
+      { id: 'other', label: '其他', words: [] },
+    ]
+
+    // 每个大类下再按「流程」细分小类，漫剧就是 大纲/剧本/人物/美术/分镜/站位/视频。
+    const LOCAL_SUBCATEGORIES = {
+      drama: [
+        { id: 'outline', label: '大纲改编', words: ['大纲', '改编', '拆书', 'outline', 'adapt'] },
+        { id: 'script', label: '剧本台词', words: ['剧本', '台词', '场次', '写戏', 'script', 'screenplay', 'dialogue'] },
+        { id: 'characters', label: '人物角色', words: ['人物', '角色', '人设', '画像', 'character', 'cast'] },
+        { id: 'art', label: '美术场景', words: ['美术', '场景', '道具', '设定集', 'art', 'scene', 'prop'] },
+        { id: 'storyboard', label: '分镜镜头', words: ['分镜', '镜头', 'storyboard', 'shot', 'frame'] },
+        { id: 'staging', label: '站位调度', words: ['站位', '调度', '走位', 'staging', 'blocking'] },
+        { id: 'video', label: '视频配音', words: ['视频', '配音', '音频', '字幕', 'video', 'audio', 'voice'] },
+      ],
+      image: [
+        { id: 'poster', label: '海报封面', words: ['海报', '封面', '宣传图', 'poster', 'cover'] },
+        { id: 'illustration', label: '插画视觉', words: ['插画', '视觉', '美术', 'illustration', 'visual', 'art'] },
+        { id: 'ui', label: '界面图标', words: ['界面', '图标', 'ui', 'icon', 'logo'] },
+        { id: 'export', label: '导出排版', words: ['导出', '排版', 'pdf', 'png', 'layout'] },
+      ],
+      video: [
+        { id: 'editing', label: '剪辑合成', words: ['剪辑', '合成', 'edit', 'clip'] },
+        { id: 'voice', label: '配音音频', words: ['配音', '音频', 'voice', 'audio', 'tts'] },
+        { id: 'subtitle', label: '字幕翻译', words: ['字幕', '翻译', 'subtitle', 'caption'] },
+      ],
+      dev: [
+        { id: 'plugin', label: '插件开发', words: ['插件', 'plugin', 'bundle'] },
+        { id: 'test', label: '测试评测', words: ['测试', '调试', '评测', 'test', 'debug', 'eval'] },
+        { id: 'deploy', label: '部署运维', words: ['部署', '运维', 'deploy', 'ops'] },
+        { id: 'api', label: '接口集成', words: ['接口', '集成', 'api', 'sdk', 'mcp'] },
+      ],
+      docs: [
+        { id: 'resume', label: '简历求职', words: ['简历', '求职', 'resume', 'cv'] },
+        { id: 'report', label: '报告写作', words: ['报告', '论文', '写作', 'report', 'paper'] },
+        { id: 'sheet', label: '表格数据', words: ['表格', 'sheet', 'excel', 'xlsx'] },
+        { id: 'slides', label: '演示文稿', words: ['演示', '幻灯', 'ppt', 'slide', 'deck'] },
+      ],
+      data: [
+        { id: 'cleaning', label: '数据清洗', words: ['清洗', '整理', 'clean', 'etl'] },
+        { id: 'analysis', label: '分析建模', words: ['分析', '建模', 'analysis', 'model'] },
+        { id: 'chart', label: '图表可视化', words: ['图表', '可视化', 'chart', 'viz'] },
+      ],
+      auto: [
+        { id: 'workflow', label: '工作流', words: ['工作流', '流程', 'workflow', 'pipeline'] },
+        { id: 'agent', label: '智能体', words: ['智能体', 'agent', 'bot'] },
+        { id: 'schedule', label: '定时任务', words: ['定时', '计划', 'schedule', 'cron'] },
+      ],
+      other: [],
+    }
+
+    // 英文技能名看不懂：内置一份中文说明，覆盖官方与常见技能；未知的回退到「分类 + 小类」中文模板。
+    const ZH_SKILLS = {
+      'canvas-design': '按设计哲学生成海报、插画等静态视觉，产出 .png / .pdf，适合做封面、宣传图和艺术风格实验。',
+      'skill-creator': '创建、改写和评估「技能」本身：写 SKILL.md、优化描述与触发条件、跑评测，让技能更准地被调用。',
+      'novel-outline': '把小说改编成短剧大纲：改编说明、人物表、爽点表、分集梗概和资产清单，带 14 道质量门自检。',
+      'novel-script': '把大纲写成短剧剧本：场次 + 动作节拍与台词，逐集折算时长，并核对角色、场景与道具。',
+      'novel-characters': '从小说里拆角色表、人物画像、形象与音色提示词，产出角色卡和可交互报告。',
+      'novel-art': '给短剧出美术设定集：场景与叙事道具的设定意图、一致性锚点、光照变体与出图提示词。',
+      'novel-staging': '给每一场排开场站位：谁站在哪件东西的哪一侧、坐着还是站着、面朝哪，输出可调整的站位报告。',
+      'novel-storyboard': '给短剧出分镜：段 → 分镜 → 分镜图三层结构，每段带一条视频提示词，18 道质量门自检。',
+      'character-refs': '给故事角色出参考图：先定一张正面全身锚点，再派生大头照、侧身、背面与细节，保证跨集一致。',
+      'pdf': '读取、生成与编辑 PDF：提取文字表格、合并拆分、填表单、加水印。',
+      'docx': '读写 Word 文档：套模板、批量替换、生成报告与合同。',
+      'xlsx': '读写 Excel 表格：清洗数据、写公式、生成图表与透视表。',
+      'pptx': '制作演示文稿：套版式、生成图表页、统一风格。',
+    }
+
+    const ZH_REPOS = {
+      'anthropics/skills': 'Anthropic 官方技能合集：静态视觉设计（海报 / 插画 / PDF）与技能创建、优化工具。',
+      'eternityspring/shuohao-skills': '中文 AI 短剧（漫剧）制作流水线：大纲改编 → 剧本 → 人物 → 美术 → 站位 → 分镜，一条龙 7 个技能。',
+    }
+
+    function hasCjk(text) {
+      return /[\u4e00-\u9fff]/.test(String(text || ''))
+    }
+
+    // YAML 的块标量会被读成「|」，这类占位符不能当简介用。
+    function usableText(text) {
+      const value = String(text == null ? '' : text).replace(/\s+/g, ' ').trim()
+      if (!value || value === '|' || value === '>' || value.length < 4) return ''
+      return value
+    }
+
+    function firstZhSentence(text, limit) {
+      const value = usableText(text)
+      if (!value) return ''
+      const sentence = value.split(/(?<=[。！？!?])\s*/)[0] || value
+      const out = hasCjk(sentence) ? sentence : value
+      const max = limit || 96
+      return out.length > max ? out.slice(0, max) + '…' : out
+    }
+
+    function pickCategory(haystack) {
+      const text = String(haystack || '').toLowerCase()
+      let best = LOCAL_CATEGORIES[LOCAL_CATEGORIES.length - 1]
+      let bestHits = 0
+      for (const entry of LOCAL_CATEGORIES) {
+        let hits = 0
+        for (const word of entry.words) {
+          if (text.indexOf(word.toLowerCase()) >= 0) hits += 1
+        }
+        if (hits > bestHits) {
+          best = entry
+          bestHits = hits
+        }
+      }
+      return { entry: best, hits: bestHits }
+    }
+
+    function localClassify(text) {
+      const picked = pickCategory(text)
+      return { id: picked.entry.id, label: picked.entry.label }
+    }
+
+    function subcategoryOf(text, categoryId) {
+      const list = LOCAL_SUBCATEGORIES[categoryId] || []
+      const haystack = String(text || '').toLowerCase()
+      let best = null
+      let bestHits = 0
+      for (const entry of list) {
+        let hits = 0
+        for (const word of entry.words) {
+          if (haystack.indexOf(word.toLowerCase()) >= 0) hits += 1
+        }
+        if (hits > bestHits) {
+          best = entry
+          bestHits = hits
+        }
+      }
+      return best
+    }
+
+    function localKeywords(texts, limit) {
+      const seen = {}
+      const out = []
+      const push = function (word) {
+        const value = String(word || '').trim()
+        if (value.length < 2 || seen[value]) return
+        seen[value] = true
+        out.push(value)
+      }
+      const joined = (Array.isArray(texts) ? texts : [texts]).filter(Boolean).join(' ')
+      const lower = joined.toLowerCase()
+      for (const entry of LOCAL_CATEGORIES) {
+        for (const word of entry.words) {
+          if (lower.indexOf(word.toLowerCase()) >= 0) push(word)
+        }
+      }
+      for (const key of Object.keys(LOCAL_SUBCATEGORIES)) {
+        for (const entry of LOCAL_SUBCATEGORIES[key]) {
+          for (const word of entry.words) {
+            if (lower.indexOf(word.toLowerCase()) >= 0) push(word)
+          }
+        }
+      }
+      const ascii = joined.match(/[A-Za-z][A-Za-z0-9+#.-]{2,}/g) || []
+      for (const word of ascii) push(word)
+      for (const chunk of joined.split(/[与和及、，。；;的了\s]+/)) {
+        if (chunk.length >= 2 && chunk.length <= 6 && hasCjk(chunk)) push(chunk)
+      }
+      return out.slice(0, limit || 8)
+    }
+
+    function skillSummaryZh(skill, categoryId) {
+      const curated = ZH_SKILLS[skill.name]
+      if (curated) return curated
+      const desc = usableText(skill.description)
+      if (desc && hasCjk(desc)) return firstZhSentence(desc)
+      const sub = subcategoryOf([skill.name, skill.description].join(' '), categoryId)
+      const kind = sub ? sub.label : '通用'
+      return '「' + skill.name + '」属于' + kind + '类技能' + (skill.fileCount ? '，含 ' + skill.fileCount + ' 个文件' : '') + '，装好后 AI 可直接调用。'
+    }
+
+    function categoryCounts(projects, skills) {
+      const counts = {}
+      for (const project of projects) counts[project.category] = (counts[project.category] || 0) + 1
+      const out = []
+      for (const entry of LOCAL_CATEGORIES) {
+        const count = counts[entry.id] || 0
+        if (count) out.push({ id: entry.id, label: entry.label, count: count })
+      }
+      if (!out.length && skills && skills.length) {
+        const seen = {}
+        for (const skill of skills) {
+          const category = localClassify([skill.name, skill.description, skill.repo].join(' '))
+          seen[category.id] = (seen[category.id] || 0) + 1
+        }
+        for (const entry of LOCAL_CATEGORIES) {
+          if (seen[entry.id]) out.push({ id: entry.id, label: entry.label, count: seen[entry.id] })
+        }
+      }
+      return out
+    }
+
+    function projectsFromSkills(skills, repoInfo) {
+      const info = repoInfo || {}
+      const groups = {}
+      for (const skill of Array.isArray(skills) ? skills : []) {
+        if (!skill) continue
+        const repo = String(skill.repo || '').trim() || '本机技能'
+        if (!groups[repo]) groups[repo] = { repo: repo, ref: '', skills: [], installed: true, local: true }
+        groups[repo].skills.push(skill)
+      }
+      const projects = []
+      for (const repo of Object.keys(groups)) {
+        const project = groups[repo]
+        const extra = info[repo] || {}
+        const topics = Array.isArray(extra.topics) ? extra.topics : []
+        const texts = [repo, extra.description || '', topics.join(' ')]
+        for (const skill of project.skills) texts.push(skill.name, skill.description || '', skill.whenToUse || '')
+        const category = localClassify(texts.join(' '))
+        const skillRows = project.skills.map(function (skill) {
+          const sub = subcategoryOf([skill.name, skill.description].join(' '), category.id)
+          return {
+            name: skill.name,
+            dirInRepo: skill.dirInRepo || '',
+            summaryZh: skillSummaryZh(skill, category.id),
+            keywords: localKeywords([skill.name, skill.description, skill.whenToUse], 6),
+            fileCount: skill.fileCount || 0,
+            subcategory: sub ? sub.id : '',
+            subcategoryLabel: sub ? sub.label : '',
+            installed: true,
+          }
+        })
+        const curated = ZH_REPOS[repo]
+        const description = usableText(extra.description)
+        const summaryZh =
+          curated ||
+          (description && hasCjk(description) ? firstZhSentence(description) : '') ||
+          (skillRows[0] && hasCjk(skillRows[0].summaryZh) ? skillRows[0].summaryZh : '') ||
+          'GitHub 上的「' + repo + '」技能合集，共 ' + skillRows.length + ' 个技能，装好后 AI 可直接调用。'
+        projects.push(
+          Object.assign({}, project, {
+            category: category.id,
+            categoryLabel: category.label,
+            description: description,
+            summaryZh: summaryZh,
+            keywords: localKeywords(texts.concat([curated || '']), 10),
+            skills: skillRows,
+            installed: true,
+          }),
+        )
+      }
+      projects.sort(function (a, b) {
+        return a.repo.localeCompare(b.repo)
+      })
+      return projects
+    }
+
+    // 已安装技能按「大类 → 小类」分组，供技能视图展示。
+    function groupSkills(skills, onlyCategory) {
+      const buckets = new Map()
+      for (const skill of Array.isArray(skills) ? skills : []) {
+        if (!skill) continue
+        const category = localClassify([skill.name, skill.description, skill.repo, skill.whenToUse].join(' '))
+        if (onlyCategory && onlyCategory !== 'all' && category.id !== onlyCategory) continue
+        const sub = subcategoryOf([skill.name, skill.description].join(' '), category.id)
+        const key = category.id + '/' + (sub ? sub.id : '')
+        if (!buckets.has(key)) {
+          buckets.set(key, { category: category, sub: sub, skills: [] })
+        }
+        buckets.get(key).skills.push(skill)
+      }
+      const order = new Map()
+      LOCAL_CATEGORIES.forEach(function (entry, index) {
+        order.set(entry.id, index)
+      })
+      const out = []
+      for (const bucket of buckets.values()) {
+        const last = out[out.length - 1]
+        const row = {
+          category: bucket.category,
+          sub: bucket.sub,
+          label: bucket.sub ? bucket.sub.label : '其他',
+          skills: bucket.skills,
+        }
+        if (last && last.category.id === bucket.category.id) {
+          last.groups.push(row)
+          last.count += row.skills.length
+        } else {
+          out.push({ category: bucket.category, count: row.skills.length, groups: [row] })
+        }
+      }
+      out.sort(function (a, b) {
+        return (order.get(a.category.id) == null ? 99 : order.get(a.category.id)) - (order.get(b.category.id) == null ? 99 : order.get(b.category.id))
+      })
+      return out
+    }
+
+    function missingRoute(error) {
+      // The harness webserver answers unknown paths with 404 on GET and 405 on other methods.
+      return /HTTP (404|405)|not found|method not allowed|未找到/i.test(messageOf(error))
+    }
+
+    async function fallbackInstallProject(repo) {
+      const info = await apiCall('GET', '/repos/' + repo)
+      const branch = (info && info.default_branch) || 'main'
+      const tree = await apiCall('GET', '/repos/' + repo + '/git/trees/' + encodeURIComponent(branch) + '?recursive=1')
+      const entries = Array.isArray(tree && tree.tree) ? tree.tree : []
+      const dirs = []
+      for (const entry of entries) {
+        if (!entry || entry.type !== 'blob') continue
+        const path = String(entry.path || '')
+        if (path !== 'SKILL.md' && path.slice(-9) !== '/SKILL.md') continue
+        const dir = path === 'SKILL.md' ? '' : path.slice(0, -9)
+        if (dir && dir.split('/').length > 3) continue
+        dirs.push(dir)
+      }
+      if (!dirs.length) throw new Error('这个仓库里没有找到 SKILL.md')
+      const names = []
+      for (const dir of dirs) {
+        const payload = await fetchJson(ROUTE + '/skills/install', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ repo: repo, dir: dir, ref: '' }),
+        })
+        const skill = (payload && payload.skill) || {}
+        names.push(skill.name || dir || repo)
+      }
+      return names
+    }
+
+    // 旧宿主没有 /skills/update：在界面这一侧逐仓库比提交，落后的技能重新下载。
+    async function fallbackUpdateSkills() {
+      const groups = new Map()
+      for (const skill of state.skills || []) {
+        if (!skill || !skill.repo || !skill.commitSha) continue
+        const list = groups.get(skill.repo) || []
+        list.push(skill)
+        groups.set(skill.repo, list)
+      }
+      let checked = 0
+      let failed = 0
+      const updated = []
+      for (const [repo, list] of groups) {
+        checked += list.length
+        try {
+          let branch = list[0].ref || ''
+          if (!branch) {
+            try {
+              const meta = await apiCall('GET', '/repos/' + repo)
+              branch = (meta && meta.default_branch) || 'main'
+            } catch (metaError) {
+              branch = 'main'
+            }
+          }
+          const head = await apiCall('GET', '/repos/' + repo + '/commits/' + encodeURIComponent(branch))
+          const headSha = head && head.sha
+          if (!headSha) continue
+          for (const skill of list) {
+            if (skill.commitSha === headSha) continue
+            await fetchJson(ROUTE + '/skills/install', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ repo: repo, dir: skill.dirInRepo || '', ref: '' }),
+            })
+            updated.push({ repo: repo, name: skill.name })
+          }
+        } catch (error) {
+          failed += 1
+        }
+      }
+      return { checked: checked, updated: updated, failed: failed }
+    }
+
+    async function fallbackRemoveProject(repo) {
+      const names = (state.skills || [])
+        .filter(function (skill) {
+          return skill && (String(skill.repo || '').trim() || '本机技能') === repo
+        })
+        .map(function (skill) {
+          return skill.name
+        })
+      for (const name of names) {
+        await fetchJson(ROUTE + '/skills/remove', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: name }),
+        })
+      }
+      return names.length
+    }
+
+    // 仓库的英文 description / topics 只用来做分类与「原文」展示，拿不到就跳过。
+    async function loadRepoInfo(skills) {
+      const repos = {}
+      for (const skill of skills || []) {
+        const repo = String((skill && skill.repo) || '').trim()
+        if (repo) repos[repo] = true
+      }
+      const out = {}
+      await Promise.all(
+        Object.keys(repos).map(async function (repo) {
+          try {
+            const info = await apiCall('GET', '/repos/' + repo)
+            out[repo] = {
+              description: info && info.description ? String(info.description) : '',
+              topics: Array.isArray(info && info.topics) ? info.topics : [],
+            }
+          } catch (error) {
+            out[repo] = { description: '', topics: [] }
+          }
+        }),
+      )
+      return out
+    }
+
+    // 宿主项目行与界面行合并：同一仓库优先用界面算出来的中文简介与小类。
+    function mergeLocalProjects(projects, localProjects) {
+      const byRepo = {}
+      for (const project of projects) byRepo[project.repo] = project
+      const out = []
+      for (const local of localProjects) {
+        const host = byRepo[local.repo]
+        out.push(
+          host
+            ? Object.assign({}, host, {
+                category: local.category,
+                categoryLabel: local.categoryLabel,
+                summaryZh: local.summaryZh,
+                keywords: local.keywords.length ? local.keywords : host.keywords || [],
+                description: local.description || host.description || '',
+                skills: (host.skills || []).map(function (skill) {
+                  const mine = local.skills.filter(function (row) {
+                    return row.name === skill.name
+                  })[0]
+                  return mine ? Object.assign({}, skill, mine) : skill
+                }),
+              })
+            : local,
+        )
+        delete byRepo[local.repo]
+      }
+      for (const repo of Object.keys(byRepo)) {
+        const project = byRepo[repo]
+        out.push(
+          Object.assign({}, project, {
+            category: project.category || 'other',
+            categoryLabel: project.categoryLabel || '其他',
+            summaryZh: project.summaryZh || project.repo,
+          }),
+        )
+      }
+      out.sort(function (a, b) {
+        return String(a.repo).localeCompare(String(b.repo))
+      })
+      return out
+    }
+
+    async function loadProjects(quiet) {
+      if (!quiet || !state.projects) set({ projectsLoading: true, projectsError: null })
+      if (!state.skills) await loadSkills(true)
+      const info = await loadRepoInfo(state.skills)
+      const localProjects = projectsFromSkills(state.skills, info)
+      let projects = localProjects
+      let projectsLocal = true
+      try {
+        const payload = await fetchJson(ROUTE + '/skills/projects')
+        projects = mergeLocalProjects(Array.isArray(payload.projects) ? payload.projects : [], localProjects)
+        projectsLocal = false
+      } catch (error) {
+        if (!missingRoute(error)) {
+          set({ projectsLoading: false, projectsError: messageOf(error) })
+          return
+        }
+      }
+      set({
+        projectsLoading: false,
+        projectsError: null,
+        projectsLocal: projectsLocal,
+        projects: projects,
+        projectCategories: categoryCounts(projects, state.skills),
+      })
+    }
+
+    function markProjectBusy(repo, value) {
+      const busy = Object.assign({}, state.projectBusy)
+      if (value) busy[repo] = value
+      else delete busy[repo]
+      set({ projectBusy: busy })
+    }
+
+    async function installProject(repo) {
+      const full = String(repo || '').trim()
+      if (!full || state.projectBusy[full]) return
+      markProjectBusy(full, 'installing')
+      set({ projectNotice: null, actionError: null })
+      try {
+        let label = '其他'
+        let count = 0
+        try {
+          const payload = await fetchJson(ROUTE + '/skills/projects/install', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ repo: full }),
+          })
+          const project = payload.project || {}
+          count = (project.skills || []).length
+          label = project.categoryLabel || '其他'
+        } catch (error) {
+          if (!missingRoute(error)) throw error
+          const names = await fallbackInstallProject(full)
+          count = names.length
+          label = localClassify(full + ' ' + names.join(' ')).label
+        }
+        set({
+          projectNotice: '已把 ' + full + ' 作为项目安装进技能库（' + count + ' 个技能，分类：' + label + '）',
+        })
+        await Promise.all([loadProjects(true), loadSkills(true)])
+      } catch (error) {
+        set({ actionError: messageOf(error) })
+      } finally {
+        markProjectBusy(full, null)
+      }
+    }
+
+    async function removeProject(repo) {
+      let confirmed = true
+      try {
+        confirmed = window.confirm('卸载项目 ' + repo + '？会删除它安装到 ~/.dsh/skills 下的所有技能。')
+      } catch {
+        confirmed = true
+      }
+      if (!confirmed) return
+      try {
+        let removed = 0
+        try {
+          const payload = await fetchJson(ROUTE + '/skills/projects/remove', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ repo: repo }),
+          })
+          removed = payload.removed || 0
+        } catch (error) {
+          if (!missingRoute(error)) throw error
+          removed = await fallbackRemoveProject(repo)
+        }
+        set({ projectNotice: '已卸载项目 ' + repo + '（' + removed + ' 个技能）' })
+        await Promise.all([loadProjects(true), loadSkills(true)])
+      } catch (error) {
+        set({ projectsError: messageOf(error) })
+      }
+    }
+
+    function toggleProject(repo) {
+      const open = Object.assign({}, state.openProjects)
+      if (open[repo]) delete open[repo]
+      else open[repo] = true
+      set({ openProjects: open })
+    }
+
+    function setSkillCategory(id) {
+      set({ skillCategory: id || 'all' })
+    }
+
     /* ----------------------------------------------------------------- clones */
 
     async function loadClones(quiet, fetchRemote) {
       if (!quiet || !state.clones) set({ clonesLoading: true, clonesError: null })
+      // The clone rows show 已安装/安装 from the skill catalogue, so keep it fresh too.
+      if (!state.skills) loadSkills(true)
       try {
         const payload = await fetchJson(ROUTE + '/clones' + (fetchRemote ? '?fetch=1' : ''))
         set({
@@ -972,7 +1549,10 @@ window.__ModuleLoader__.load({
       if (value === 'stars' && !state.stars) loadStars()
       if (value === 'social' && !state.social) loadSocial()
       if (value === 'activity' && !state.activity) loadActivity()
-      if (value === 'skills' && !state.skills) loadSkills()
+      if (value === 'skills' && !state.projects) {
+        loadSkills()
+        loadProjects()
+      }
       if (value === 'clones' && !state.clones) loadClones(false, true)
       if (value === 'notifications' && !state.notifications) loadNotifications()
     }
@@ -982,7 +1562,10 @@ window.__ModuleLoader__.load({
       if (view === 'stars') loadStars(quiet)
       else if (view === 'social') loadSocial(quiet)
       else if (view === 'activity') loadActivity(quiet)
-      else if (view === 'skills') loadSkills(quiet)
+      else if (view === 'skills') {
+        loadSkills(quiet)
+        loadProjects(quiet)
+      }
       else if (view === 'clones') loadClones(quiet, true)
       else if (view === 'notifications') loadNotifications(quiet)
       else loadRepos(quiet)
@@ -1704,6 +2287,23 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // GitHub 头像偶尔加载不出来（网络/代理），退回首字母，别留一个破图标。
+    function Avatar(props) {
+      const fallback = String(props.login || '?').slice(0, 1).toUpperCase()
+      const [failed, setFailed] = React.useState(false)
+      if (!props.src || failed) {
+        return h('span', { className: props.className + ' ghp-avatar-text', title: props.login || '' }, fallback)
+      }
+      return h('img', {
+        className: props.className,
+        src: props.src,
+        alt: '',
+        onError: function () {
+          setFailed(true)
+        },
+      })
+    }
+
     function userChips(rows, emptyText) {
       const list = Array.isArray(rows) ? rows : []
       if (!list.length) return h('div', { className: 'ghp-empty' }, emptyText)
@@ -1714,7 +2314,7 @@ window.__ModuleLoader__.load({
           return h(
             'div',
             { className: 'ghp-chip-user', key: row.login, title: row.login },
-            row.avatar_url ? h('img', { className: 'ghp-chip-avatar', src: row.avatar_url, alt: '' }) : null,
+            h(Avatar, { className: 'ghp-chip-avatar', src: row.avatar_url, login: row.login }),
             h('span', null, row.login),
           )
         }),
@@ -1967,8 +2567,202 @@ window.__ModuleLoader__.load({
       }
     }
 
+    async function updateSkills() {
+      if (state.skillsUpdating) return
+      set({ skillsUpdating: true, projectNotice: null, actionError: null })
+      try {
+        const payload = await fetchJson(ROUTE + '/skills/update', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ all: true }),
+        })
+        const updated = Array.isArray(payload.updated) ? payload.updated : []
+        const errors = Array.isArray(payload.errors) ? payload.errors : []
+        set({
+          projectNotice: updated.length
+            ? '已更新 ' + updated.length + ' 个技能：' + updated.map(function (row) { return row.name }).join('、')
+            : '技能库已是最新版本（检查了 ' + (payload.checked || 0) + ' 个技能）' + (errors.length ? '，' + errors.length + ' 个仓库读取失败' : ''),
+        })
+        await Promise.all([loadSkills(true), loadProjects(true)])
+      } catch (error) {
+        if (!missingRoute(error)) {
+          set({ actionError: messageOf(error) })
+          return
+        }
+        // 旧宿主没有这条路由：在界面这一侧比提交、重新下载落后的技能。
+        try {
+          const result = await fallbackUpdateSkills()
+          const names = result.updated.map(function (row) { return row.name })
+          set({
+            projectNotice: names.length
+              ? '已更新 ' + names.length + ' 个技能：' + names.join('、')
+              : '技能库已是最新版本（检查了 ' + result.checked + ' 个技能）' + (result.failed ? '，' + result.failed + ' 个仓库读取失败' : ''),
+          })
+          await Promise.all([loadSkills(true), loadProjects(true)])
+        } catch (fallbackError) {
+          set({ actionError: messageOf(fallbackError) })
+        }
+      } finally {
+        set({ skillsUpdating: false })
+      }
+    }
+
+    function projectCard(project) {
+      const open = !!(state.openProjects || {})[project.repo]
+      const busy = (state.projectBusy || {})[project.repo]
+      const skills = project.skills || []
+      const actions = h(
+        'div',
+        { className: 'ghp-project-actions' },
+        h(
+          Button,
+          {
+            small: true,
+            onClick: function () {
+              installProject(project.repo)
+            },
+            disabled: !!busy,
+            title: '重新从 GitHub 拉取这个项目的全部技能',
+          },
+          busy ? '安装中…' : '重装',
+        ),
+        h(
+          Button,
+          {
+            small: true,
+            onClick: function () {
+              removeProject(project.repo)
+            },
+            disabled: !!busy,
+          },
+          '卸载项目',
+        ),
+      )
+      const groupedSkills = []
+      const seenSub = {}
+      for (const skill of skills) {
+        const key = skill.subcategoryLabel || '其他'
+        if (!seenSub[key]) {
+          seenSub[key] = { label: key, skills: [] }
+          groupedSkills.push(seenSub[key])
+        }
+        seenSub[key].skills.push(skill)
+      }
+      const original = String(project.description || '').trim()
+      return h(
+        'div',
+        { className: 'ghp-project', key: project.repo },
+        h(
+          'div',
+          { className: 'ghp-project-head' },
+          h('span', { className: 'ghp-project-name' }, project.repo),
+          h('span', { className: 'ghp-badge' }, project.categoryLabel || '其他'),
+          h('span', { className: 'ghp-muted ghp-small' }, skills.length + ' 个技能'),
+          h('div', { className: 'ghp-toolbar-spacer' }),
+          actions,
+        ),
+        project.summaryZh ? h('div', { className: 'ghp-project-summary' }, project.summaryZh) : null,
+        original && !hasCjk(original)
+          ? h('div', { className: 'ghp-muted ghp-small' }, '原文：' + (original.length > 180 ? original.slice(0, 180) + '…' : original))
+          : null,
+        (project.keywords || []).length
+          ? h(
+              'div',
+              { className: 'ghp-project-keywords' },
+              h('span', { className: 'ghp-muted ghp-small' }, 'AI 检索关键词'),
+              (project.keywords || []).map(function (word) {
+                return h('span', { className: 'ghp-chip', key: 'kw-' + word }, word)
+              }),
+            )
+          : null,
+        h(
+          'button',
+          {
+            className: 'ghp-project-toggle',
+            onClick: function () {
+              toggleProject(project.repo)
+            },
+          },
+          (open ? '收起技能（' : '展开 ' + skills.length + ' 个技能（') + '↑' + (open ? '）' : '↓ 展开）'),
+        ),
+        open
+          ? h(
+              'div',
+              { className: 'ghp-project-skills' },
+              groupedSkills.map(function (group) {
+                return h(
+                  'div',
+                  { className: 'ghp-subcat-group', key: 'sub-' + group.label },
+                  h('div', { className: 'ghp-subcat' }, group.label + '（' + group.skills.length + '）'),
+                  group.skills.map(function (skill) {
+                    return h(
+                      'div',
+                      { className: 'ghp-project-skill', key: skill.name },
+                      h(
+                        'div',
+                        { className: 'ghp-skill-head' },
+                        h('span', { className: 'ghp-skill-name' }, skill.name),
+                        skill.fileCount ? h('span', { className: 'ghp-muted ghp-small' }, skill.fileCount + ' 个文件') : null,
+                        skill.installed === false ? h('span', { className: 'ghp-badge ghp-badge-warn' }, '已删除') : null,
+                        h('div', { className: 'ghp-toolbar-spacer' }),
+                        h(
+                          Button,
+                          {
+                            small: true,
+                            onClick: function () {
+                              removeSkill(skill.name)
+                            },
+                          },
+                          '卸载',
+                        ),
+                      ),
+                      skill.summaryZh ? h('div', { className: 'ghp-skill-desc' }, skill.summaryZh) : null,
+                      (skill.keywords || []).length
+                        ? h(
+                            'div',
+                            { className: 'ghp-project-keywords' },
+                            (skill.keywords || []).map(function (word) {
+                              return h('span', { className: 'ghp-chip ghp-chip-dim', key: skill.name + '-' + word }, word)
+                            }),
+                          )
+                        : null,
+                    )
+                  }),
+                )
+              }),
+            )
+          : null,
+      )
+    }
+
     function renderSkills(current) {
       const skills = current.skills || []
+      const projects = current.projects || []
+      const categories = current.projectCategories || []
+      const activeCategory = current.skillCategory || 'all'
+      const shownProjects =
+        activeCategory === 'all' ? projects : projects.filter(function (project) {
+          return project.category === activeCategory
+        })
+      const categoryTabs = h(
+        'div',
+        { className: 'ghp-tabs ghp-category-tabs' },
+        [{ id: 'all', label: '全部', count: projects.length }]
+          .concat(categories)
+          .map(function (entry) {
+            return h(
+              'button',
+              {
+                className: 'ghp-tab' + (activeCategory === entry.id ? ' is-active' : ''),
+                key: 'cat-' + entry.id,
+                onClick: function () {
+                  setSkillCategory(entry.id)
+                },
+              },
+              entry.label + '（' + entry.count + '）',
+            )
+          }),
+      )
       const form = current.skillForm || { repo: '', dir: '', ref: '', busy: false, error: null }
       const installCard = h(
         'div',
@@ -2042,14 +2836,20 @@ window.__ModuleLoader__.load({
           '目录里必须有 SKILL.md（带 name / description 前置信息）。安装时按仓库最新提交逐个下载文件，内容和 GitHub 保持同步。',
         ),
       )
-      const list = skills.map(function (skill) {
+      const skillRow = function (skill) {
+        const category = localClassify([skill.name, skill.description, skill.repo, skill.whenToUse].join(' '))
+        const sub = subcategoryOf([skill.name, skill.description].join(' '), category.id)
+        const original = usableText(skill.description)
+        const summary = skillSummaryZh(skill, category.id)
         return h(
           'div',
-          { className: 'ghp-skill', key: skill.dir },
+          { className: 'ghp-skill', key: skill.dir || skill.name },
           h(
             'div',
             { className: 'ghp-skill-head' },
             h('span', { className: 'ghp-skill-name' }, skill.name),
+            h('span', { className: 'ghp-badge' }, category.label),
+            sub ? h('span', { className: 'ghp-chip ghp-chip-dim' }, sub.label) : null,
             h('span', { className: 'ghp-badge' }, skill.source === 'github' ? 'GitHub' : '本地'),
             skill.fileCount ? h('span', { className: 'ghp-muted ghp-small' }, skill.fileCount + ' 个文件') : null,
             h('div', { className: 'ghp-toolbar-spacer' }),
@@ -2064,7 +2864,17 @@ window.__ModuleLoader__.load({
               '卸载',
             ),
           ),
-          skill.description ? h('div', { className: 'ghp-skill-desc' }, skill.description) : null,
+          summary ? h('div', { className: 'ghp-skill-desc' }, summary) : null,
+          original && original !== summary && !hasCjk(original)
+            ? h('div', { className: 'ghp-muted ghp-small' }, '原文：' + (original.length > 160 ? original.slice(0, 160) + '…' : original))
+            : null,
+          h(
+            'div',
+            { className: 'ghp-project-keywords' },
+            localKeywords([skill.name, skill.description, skill.whenToUse], 6).map(function (word) {
+              return h('span', { className: 'ghp-chip ghp-chip-dim', key: (skill.name || '') + '-kw-' + word }, word)
+            }),
+          ),
           h(
             'div',
             { className: 'ghp-muted ghp-small ghp-mono' },
@@ -2072,10 +2882,64 @@ window.__ModuleLoader__.load({
               (skill.installedAt ? timeAgo(skill.installedAt) + '安装' : '本地 · 更新于 ' + timeAgo(skill.updatedAt)),
           ),
         )
+      }
+      const skillGroups = groupSkills(skills, activeCategory)
+      const list = skillGroups.map(function (group) {
+        return h(
+          'div',
+          { className: 'ghp-cat-group', key: 'cat-group-' + group.category.id },
+          h(
+            'div',
+            { className: 'ghp-cat-head' },
+            h('span', { className: 'ghp-cat-name' }, group.category.label),
+            h('span', { className: 'ghp-muted ghp-small' }, group.count + ' 个技能'),
+          ),
+          group.groups.map(function (row) {
+            return h(
+              'div',
+              { className: 'ghp-subcat-group', key: 'cat-' + group.category.id + '-' + row.label },
+              row.label ? h('div', { className: 'ghp-subcat' }, row.label + '（' + row.skills.length + '）') : null,
+              row.skills.map(skillRow),
+            )
+          }),
+        )
       })
       const body = h(
         'div',
         { className: 'ghp-skills' },
+        current.projectNotice
+          ? h(
+              'div',
+              { className: 'ghp-notice-ok' },
+              current.projectNotice,
+              h(
+                'button',
+                {
+                  className: 'ghp-banner-close',
+                  onClick: function () {
+                    set({ projectNotice: null })
+                  },
+                },
+                '×',
+              ),
+            )
+          : null,
+        h(
+          'div',
+          { className: 'ghp-section-head' },
+          h('h3', { className: 'ghp-h3' }, '技能项目'),
+          h('span', { className: 'ghp-muted ghp-small' }, projects.length + ' 个项目 · 每个项目下的技能都能被 AI 直接调用'),
+        ),
+        projects.length > 0 ? categoryTabs : null,
+        projects.length === 0
+          ? h(
+              'div',
+              { className: 'ghp-empty' },
+              '技能库还是空的。去「克隆」页给某个仓库点「安装」，整个项目的技能会一起进来，并自动分类、写好中文简介和检索关键词。',
+            )
+          : shownProjects.length === 0
+            ? h('div', { className: 'ghp-empty' }, '这个分类下还没有项目。')
+            : h('div', { className: 'ghp-project-list' }, shownProjects.map(projectCard)),
         installCard,
         h(
           'div',
@@ -2100,10 +2964,24 @@ window.__ModuleLoader__.load({
           h(
             Button,
             {
+              key: 'update',
+              small: true,
+              disabled: current.skillsUpdating || !current.connected,
+              title: '按 GitHub 最新提交重新下载已安装的技能',
+              onClick: function () {
+                updateSkills()
+              },
+            },
+            current.skillsUpdating ? '检查中…' : '检查更新',
+          ),
+          h(
+            Button,
+            {
               key: 'reload',
               small: true,
               onClick: function () {
                 loadSkills()
+                loadProjects(true)
               },
             },
             '刷新',
@@ -2142,6 +3020,11 @@ window.__ModuleLoader__.load({
       const auto = current.cloneAuto || { enabled: true, minutes: 15 }
       const notice = current.cloneNotice
       const git = current.cloneGit
+      const installedRepos = {}
+      for (const skill of current.skills || []) {
+        const repo = String((skill && skill.repo) || '').trim()
+        if (repo) installedRepos[repo] = true
+      }
 
       const tabBar = h(
         'div',
@@ -2234,7 +3117,24 @@ window.__ModuleLoader__.load({
                   : h('span', { className: 'ghp-badge ghp-badge-ok' }, '最新'),
               clone.ahead ? h('span', { className: 'ghp-badge' }, '领先 ' + clone.ahead) : null,
               clone.dirty ? h('span', { className: 'ghp-badge ghp-badge-warn' }, '有本地改动') : null,
+              installedRepos[clone.repo]
+                ? h('span', { className: 'ghp-badge ghp-badge-ok' }, '已安装')
+                : h('span', { className: 'ghp-badge' }, '未安装'),
               h('div', { className: 'ghp-toolbar-spacer' }),
+              installedRepos[clone.repo]
+                ? null
+                : h(
+                    Button,
+                    {
+                      small: true,
+                      disabled: !!rowBusy || !!state.projectBusy[clone.repo],
+                      title: '把这个项目里的全部技能装进技能库',
+                      onClick: function () {
+                        installProject(clone.repo)
+                      },
+                    },
+                    state.projectBusy[clone.repo] ? '安装中…' : '安装',
+                  ),
               h(
                 Button,
                 {
@@ -2533,7 +3433,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'ghp-card ghp-guest-head' },
-            profile.avatar_url ? h('img', { className: 'ghp-guest-avatar', src: profile.avatar_url, alt: '' }) : null,
+            h(Avatar, { className: 'ghp-guest-avatar', src: profile.avatar_url, login: guest.login || profile.login }),
             h(
               'div',
               { className: 'ghp-guest-text' },
@@ -2760,9 +3660,7 @@ window.__ModuleLoader__.load({
             ? h(
                 'div',
                 { className: 'ghp-account-chip' },
-                current.profile.avatarUrl
-                  ? h('img', { className: 'ghp-avatar', src: current.profile.avatarUrl, alt: '' })
-                  : null,
+                h(Avatar, { className: 'ghp-avatar', src: current.profile.avatarUrl, login: current.profile.login }),
                 h('span', { className: 'ghp-account-name' }, current.profile.login || current.profile.name || ''),
                 h(Button, { small: true, onClick: disconnect }, '断开'),
               )
@@ -2770,9 +3668,7 @@ window.__ModuleLoader__.load({
               ? h(
                   'div',
                   { className: 'ghp-account-chip' },
-                  current.guest.profile && current.guest.profile.avatar_url
-                    ? h('img', { className: 'ghp-avatar', src: current.guest.profile.avatar_url, alt: '' })
-                    : null,
+                  h(Avatar, { className: 'ghp-avatar', src: current.guest.profile && current.guest.profile.avatar_url, login: current.guest.login }),
                   h('span', { className: 'ghp-account-name' }, '访客 · ' + (current.guest.login || '')),
                   h(Button, { small: true, onClick: exitGuest }, '退出'),
                 )
@@ -2841,6 +3737,7 @@ window.__ModuleLoader__.load({
       '.ghp-notice{font-size:12px;color:var(--dsw-alias-state-success-primary);background:var(--dsw-alias-bg-layer-2);padding:3px 9px;border-radius:999px}',
       '.ghp-account-chip{display:flex;align-items:center;gap:8px}',
       '.ghp-avatar{width:24px;height:24px;border-radius:50%;display:block;object-fit:cover;background:var(--dsw-alias-bg-layer-2)}',
+      '.ghp-avatar-text{display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border-radius:50%;flex:0 0 auto}',
       '.ghp-account-name{font-size:12px;color:var(--dsw-alias-label-secondary)}',
       '.ghp-body{display:flex;flex:1;min-height:0;overflow:hidden}',
       '.ghp-side{width:300px;flex:0 0 300px;display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}',
@@ -3005,6 +3902,23 @@ window.__ModuleLoader__.load({
       '.ghp-guest-avatar{width:52px;height:52px;border-radius:50%;flex:0 0 52px;object-fit:cover;background:var(--dsw-alias-bg-layer-2)}',
       '.ghp-guest-text{display:flex;flex-direction:column;gap:2px;min-width:0}',
       '.ghp-guest-name{font-size:15px;font-weight:600}',
+      '.ghp-category-tabs{margin:2px 0 12px;flex-wrap:wrap}',
+      '.ghp-project-list{display:flex;flex-direction:column;gap:10px;margin-bottom:16px}',
+      '.ghp-project{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:12px 14px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;gap:8px}',
+      '.ghp-project-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.ghp-project-name{font-size:14px;font-weight:600}',
+      '.ghp-project-actions{display:flex;gap:6px}',
+      '.ghp-project-summary{font-size:12px;color:var(--dsw-alias-label-secondary);line-height:1.5}',
+      '.ghp-project-keywords{display:flex;align-items:center;gap:5px;flex-wrap:wrap}',
+      '.ghp-chip-dim{opacity:.75;font-size:10px}',
+      '.ghp-project-toggle{align-self:flex-start;border:0;background:transparent;color:var(--dsw-alias-brand-primary);font:inherit;font-size:11px;cursor:pointer;padding:0}',
+      '.ghp-project-skills{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--dsw-alias-border-l1);padding-top:10px}',
+      '.ghp-project-skill{display:flex;flex-direction:column;gap:4px;padding-left:10px;border-left:2px solid var(--dsw-alias-border-l2)}',
+      '.ghp-cat-group{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}',
+      '.ghp-cat-head{display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--dsw-alias-border-l1);padding-bottom:6px}',
+      '.ghp-cat-name{font-size:13px;font-weight:600}',
+      '.ghp-subcat-group{display:flex;flex-direction:column;gap:6px}',
+      '.ghp-subcat{font-size:11px;font-weight:600;color:var(--dsw-alias-label-secondary);letter-spacing:.02em}',
     ].join('')
 
     return {

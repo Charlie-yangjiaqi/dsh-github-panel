@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "GitHub Console",
-    "description": "Connect a GitHub account with a personal access token and manage repositories, issues, pull requests, commits and notifications without opening github.com."
+    "description": "Sign in with a personal access token and work with GitHub inside the app: repositories, issues, pull requests, commits, notifications, stars and activity, clone repositories that keep themselves up to date, and install GitHub skill projects into a categorized skill library the agent can search and reuse."
   }
 }

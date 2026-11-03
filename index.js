@@ -282,17 +282,28 @@ function setup(ctx) {
     const out = {}
     const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text || ''))
     if (!match) return out
-    for (const line of match[1].split(/\r?\n/)) {
-      const pair = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line)
+    const lines = match[1].split(/\r?\n/)
+    for (let index = 0; index < lines.length; index += 1) {
+      const pair = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(lines[index])
       if (!pair) continue
+      const key = pair[1]
       let value = pair[2].trim()
-      if (
+      // YAML 块标量（description: | 后跟缩进行）不能把「|」当内容。
+      if (/^[|>][-+]?$/.test(value)) {
+        const fold = value.startsWith('>')
+        const block = []
+        while (index + 1 < lines.length && (/^\s+\S/.test(lines[index + 1]) || !lines[index + 1].trim())) {
+          block.push(lines[index + 1].trim())
+          index += 1
+        }
+        value = block.join(fold ? ' ' : '\n').trim()
+      } else if (
         (value.startsWith('"') && value.endsWith('"')) ||
         (value.startsWith("'") && value.endsWith("'"))
       ) {
         value = value.slice(1, -1)
       }
-      if (value) out[pair[1]] = value
+      if (value) out[key] = value
     }
     return out
   }
@@ -477,6 +488,535 @@ function setup(ctx) {
     if (!path.resolve(dir).startsWith(path.resolve(root) + path.sep)) throw new Error('技能名称不合法')
     await fs.rm(dir, { recursive: true, force: true })
     return { ok: true, name: entry }
+  }
+
+  /* ------------------------------------------------------- skill projects */
+
+  // A project is one repository's worth of skills. The skills themselves must
+  // stay one-directory-per-skill under ~/.dsh/skills so the harness can load
+  // them; grouping, category and the Chinese descriptions live in an index
+  // plus a small sidecar file inside every installed skill.
+  const SKILL_PROJECT_META = '.dsh-project.json'
+  const MAX_PROJECT_SKILLS = 40
+
+  const CATEGORY_TABLE = [
+    {
+      id: 'drama',
+      label: '漫剧',
+      words: ['短剧', '漫剧', '微短剧', '剧本', '分镜', '角色', '人物', '场景', '小说', '台词', 'staging', 'storyboard', 'drama', 'script', 'novel', 'comic', 'character'],
+    },
+    {
+      id: 'image',
+      label: '图像设计',
+      words: ['出图', '插画', '海报', '视觉', '角色图', '定妆照', '美术', 'image', 'img', 'svg', 'png', 'photo', 'poster', 'design', 'canvas', 'illustration'],
+    },
+    {
+      id: 'video',
+      label: '视频音频',
+      words: ['视频', '剪辑', '配音', '音频', '字幕', 'video', 'audio', 'voice', 'tts', 'subtitle', 'clip'],
+    },
+    {
+      id: 'dev',
+      label: '开发工具',
+      words: ['代码', '开发', '插件', '部署', '调试', '评测', 'code', 'dev', 'git', 'api', 'cli', 'build', 'test', 'plugin', 'mcp', 'harness', 'sdk', 'prompt', 'skill.md'],
+    },
+    {
+      id: 'docs',
+      label: '文档办公',
+      words: ['文档', '写作', '报告', '简历', '论文', '排版', '表格', 'doc', 'write', 'report', 'markdown', 'pdf', 'ppt', 'excel', 'docx', 'xlsx'],
+    },
+    {
+      id: 'data',
+      label: '数据分析',
+      words: ['数据', '分析', '统计', '爬虫', 'data', 'sql', 'csv', 'analysis', 'pandas', 'scrape'],
+    },
+    {
+      id: 'auto',
+      label: '自动化',
+      words: ['自动化', '定时', '智能体', '工作流', 'automation', 'workflow', 'bot', 'agent', 'cron'],
+    },
+  ]
+  const CATEGORY_OTHER = { id: 'other', label: '其他' }
+
+  // 每个大类之下再按「制作流程」细分小类，界面上就是 漫剧 → 剧本 / 人物 / 分镜 …
+  const SUBCATEGORY_TABLE = {
+    drama: [
+      { id: 'outline', label: '大纲改编', words: ['大纲', '改编', '拆书', 'outline', 'adapt'] },
+      { id: 'script', label: '剧本台词', words: ['剧本', '台词', '场次', '写戏', 'script', 'screenplay', 'dialogue'] },
+      { id: 'characters', label: '人物角色', words: ['人物', '角色', '人设', '画像', 'character', 'cast'] },
+      { id: 'art', label: '美术场景', words: ['美术', '场景', '道具', '设定集', 'art', 'scene', 'prop'] },
+      { id: 'storyboard', label: '分镜镜头', words: ['分镜', '镜头', 'storyboard', 'shot', 'frame'] },
+      { id: 'staging', label: '站位调度', words: ['站位', '调度', '走位', 'staging', 'blocking'] },
+      { id: 'video', label: '视频配音', words: ['视频', '配音', '音频', '字幕', 'video', 'audio', 'voice'] },
+    ],
+    image: [
+      { id: 'poster', label: '海报封面', words: ['海报', '封面', '宣传图', 'poster', 'cover'] },
+      { id: 'illustration', label: '插画视觉', words: ['插画', '视觉', '美术', 'illustration', 'visual', 'art'] },
+      { id: 'ui', label: '界面图标', words: ['界面', '图标', 'ui', 'icon', 'logo'] },
+      { id: 'export', label: '导出排版', words: ['导出', '排版', 'pdf', 'png', 'layout'] },
+    ],
+    video: [
+      { id: 'editing', label: '剪辑合成', words: ['剪辑', '合成', 'edit', 'clip'] },
+      { id: 'voice', label: '配音音频', words: ['配音', '音频', 'voice', 'audio', 'tts'] },
+      { id: 'subtitle', label: '字幕翻译', words: ['字幕', '翻译', 'subtitle', 'caption'] },
+    ],
+    dev: [
+      { id: 'plugin', label: '插件开发', words: ['插件', 'plugin', 'bundle'] },
+      { id: 'test', label: '测试评测', words: ['测试', '调试', '评测', 'test', 'debug', 'eval'] },
+      { id: 'deploy', label: '部署运维', words: ['部署', '运维', 'deploy', 'ops'] },
+      { id: 'api', label: '接口集成', words: ['接口', '集成', 'api', 'sdk', 'mcp'] },
+    ],
+    docs: [
+      { id: 'resume', label: '简历求职', words: ['简历', '求职', 'resume', 'cv'] },
+      { id: 'report', label: '报告写作', words: ['报告', '论文', '写作', 'report', 'paper'] },
+      { id: 'sheet', label: '表格数据', words: ['表格', 'sheet', 'excel', 'xlsx'] },
+      { id: 'slides', label: '演示文稿', words: ['演示', '幻灯', 'ppt', 'slide', 'deck'] },
+    ],
+    data: [
+      { id: 'cleaning', label: '数据清洗', words: ['清洗', '整理', 'clean', 'etl'] },
+      { id: 'analysis', label: '分析建模', words: ['分析', '建模', 'analysis', 'model'] },
+      { id: 'chart', label: '图表可视化', words: ['图表', '可视化', 'chart', 'viz'] },
+    ],
+    auto: [
+      { id: 'workflow', label: '工作流', words: ['工作流', '流程', 'workflow', 'pipeline'] },
+      { id: 'agent', label: '智能体', words: ['智能体', 'agent', 'bot'] },
+      { id: 'schedule', label: '定时任务', words: ['定时', '计划', 'schedule', 'cron'] },
+    ],
+  }
+
+  // 英文技能名用户看不懂：内置中文说明，未知技能回退到「分类 + 小类」模板。
+  const ZH_SKILLS = {
+    'canvas-design': '按设计哲学生成海报、插画等静态视觉，产出 .png / .pdf，适合做封面、宣传图和艺术风格实验。',
+    'skill-creator': '创建、改写和评估「技能」本身：写 SKILL.md、优化描述与触发条件、跑评测，让技能更准地被调用。',
+    'novel-outline': '把小说改编成短剧大纲：改编说明、人物表、爽点表、分集梗概和资产清单，带 14 道质量门自检。',
+    'novel-script': '把大纲写成短剧剧本：场次 + 动作节拍与台词，逐集折算时长，并核对角色、场景与道具。',
+    'novel-characters': '从小说里拆角色表、人物画像、形象与音色提示词，产出角色卡和可交互报告。',
+    'novel-art': '给短剧出美术设定集：场景与叙事道具的设定意图、一致性锚点、光照变体与出图提示词。',
+    'novel-staging': '给每一场排开场站位：谁站在哪件东西的哪一侧、坐着还是站着、面朝哪，输出可调整的站位报告。',
+    'novel-storyboard': '给短剧出分镜：段 → 分镜 → 分镜图三层结构，每段带一条视频提示词，18 道质量门自检。',
+    'character-refs': '给故事角色出参考图：先定一张正面全身锚点，再派生大头照、侧身、背面与细节，保证跨集一致。',
+  }
+
+  const ZH_REPOS = {
+    'anthropics/skills': 'Anthropic 官方技能合集：静态视觉设计（海报 / 插画 / PDF）与技能创建、优化工具。',
+    'eternityspring/shuohao-skills': '中文 AI 短剧（漫剧）制作流水线：大纲改编 → 剧本 → 人物 → 美术 → 站位 → 分镜，一条龙 7 个技能。',
+  }
+
+  const KEYWORD_STOPWORDS = new Set([
+    'the', 'and', 'for', 'with', 'from', 'this', 'that', 'into', 'your', 'you', 'use', 'when', 'asked',
+    'skill', 'skills', 'their', 'them', 'then', 'than', 'such', 'will', 'can', 'may', 'one', 'two', 'any',
+    'a', 'an', 'of', 'to', 'in', 'on', 'by', 'is', 'are', 'it', 'as', 'at', 'or', 'if',
+  ])
+
+  function projectIndexFile() {
+    return path.join(dshHome(), 'plugin-data', 'github-panel-projects.json')
+  }
+
+  async function loadProjectIndex() {
+    try {
+      const raw = await fs.readFile(projectIndexFile(), 'utf8')
+      const parsed = JSON.parse(raw)
+      return parsed && typeof parsed === 'object' && parsed.projects ? parsed : { projects: {} }
+    } catch {
+      return { projects: {} }
+    }
+  }
+
+  async function saveProjectIndex(index) {
+    const file = projectIndexFile()
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, JSON.stringify(index, null, 2), 'utf8')
+  }
+
+  function hasCjk(text) {
+    return /[\u4e00-\u9fff]/.test(String(text || ''))
+  }
+
+  function firstSentence(text, limit = 90) {
+    const flat = String(text || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!flat) return ''
+    const cut = /^(.{10,}?)[。！？!?；;.]/.exec(flat)
+    const sentence = cut ? cut[1] : flat
+    return sentence.length > limit ? sentence.slice(0, limit - 1) + '…' : sentence
+  }
+
+  function classifyProject(text) {
+    const haystack = String(text || '').toLowerCase()
+    let best = { id: CATEGORY_OTHER.id, label: CATEGORY_OTHER.label, score: 0 }
+    for (const category of CATEGORY_TABLE) {
+      let score = 0
+      for (const word of category.words) {
+        const needle = word.toLowerCase()
+        if (!needle) continue
+        let index = haystack.indexOf(needle)
+        while (index !== -1) {
+          score += 1
+          index = haystack.indexOf(needle, index + needle.length)
+        }
+      }
+      if (score > best.score) best = { id: category.id, label: category.label, score }
+    }
+    return best
+  }
+
+  function subcategoryOf(text, categoryId) {
+    const table = SUBCATEGORY_TABLE[categoryId] || []
+    const haystack = String(text || '').toLowerCase()
+    let best = null
+    let bestScore = 0
+    for (const entry of table) {
+      let score = 0
+      for (const word of entry.words) {
+        if (haystack.includes(word.toLowerCase())) score += 1
+      }
+      if (score > bestScore) {
+        best = entry
+        bestScore = score
+      }
+    }
+    return best
+  }
+
+  /** Chinese one-liner for a skill: curated name first, then its own Chinese description. */
+  function skillSummaryZh(skill, categoryId) {
+    const curated = ZH_SKILLS[skill.name]
+    if (curated) return curated
+    const desc = String(skill.description || '').replace(/\s+/g, ' ').trim()
+    if (hasCjk(desc) && desc.length >= 4 && desc !== '|') return firstSentence(desc, 96)
+    const sub = subcategoryOf(`${skill.name} ${skill.description || ''}`, categoryId)
+    const kind = sub ? sub.label : '通用'
+    return `「${skill.name}」属于${kind}类技能${skill.fileCount ? `，含 ${skill.fileCount} 个文件` : ''}，装好后 AI 可直接调用。`
+  }
+
+  function collectKeywords(texts, limit = 12) {
+    const counts = new Map()
+    const order = []
+    const push = (word) => {
+      const value = String(word || '').trim()
+      if (!value) return
+      if (!counts.has(value)) order.push(value)
+      counts.set(value, (counts.get(value) || 0) + 1)
+    }
+    const vocabulary = CATEGORY_TABLE.flatMap((category) => category.words)
+    for (const raw of texts) {
+      const text = String(raw || '')
+      if (!text) continue
+      const lower = text.toLowerCase()
+      // Curated vocabulary first: these are the words users and the model
+      // actually search with, so they outrank any n-gram we could extract.
+      for (const word of vocabulary) {
+        if (word.length < 2 || !lower.includes(word.toLowerCase())) continue
+        push(word)
+      }
+      for (const token of text.match(/[A-Za-z][A-Za-z0-9+#.]{2,}/g) || []) {
+        const word = token.toLowerCase().replace(/[.]+$/, '')
+        if (word.length < 3 || KEYWORD_STOPWORDS.has(word)) continue
+        push(word)
+      }
+      for (const run of text.match(/[\u4e00-\u9fff]{2,}/g) || []) {
+        for (const piece of run.split(/[与和及、，。的了]/)) {
+          const value = piece.trim()
+          if (value.length < 2 || value.length > 6) continue
+          if (/(技能|合集|项目|教程|说明)$/.test(value)) continue
+          push(value)
+        }
+      }
+    }
+    const ranked = order
+      .slice()
+      .sort((a, b) => (counts.get(b) || 0) - (counts.get(a) || 0))
+      .slice(0, limit)
+    return ranked
+  }
+
+  function yamlString(value) {
+    // Double-quoted YAML keeps ":" and "#" harmless and stays on one line.
+    return JSON.stringify(String(value == null ? '' : value))
+  }
+
+  /**
+   * Rewrite the two front-matter fields the model actually sees when it picks a
+   * skill (description, whenToUse) so both the Chinese summary and the retrieval
+   * keywords travel with the skill, not just with our own index.
+   */
+  async function enrichSkillFrontMatter(dir, { summaryZh, keywords }) {
+    const file = path.join(dir, 'SKILL.md')
+    const text = await fs.readFile(file, 'utf8')
+    const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
+    const body = match ? text.slice(match[0].length) : text
+    const kept = []
+    if (match) {
+      const lines = match[1].split(/\r?\n/)
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i]
+        if (/^(description|whenToUse|when-to-use|when_to_use)\s*:/.test(line)) {
+          // Drop the whole value, including indented block-scalar follow-ups.
+          while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) i += 1
+          continue
+        }
+        if (/^name\s*:/.test(line)) continue
+        kept.push(line)
+      }
+    }
+    const list = Array.isArray(keywords) ? keywords.filter(Boolean).slice(0, 16) : []
+    const whenToUse = list.length
+      ? `关键词 ${list.join('、')}；适用于：${summaryZh || '相关任务'}`
+      : summaryZh || ''
+    const front = [
+      '---',
+      `name: ${yamlString(path.basename(dir))}`,
+      `description: ${yamlString(summaryZh || '')}`,
+      `whenToUse: ${yamlString(whenToUse)}`,
+      ...kept.filter((line) => line.trim() !== ''),
+      '---',
+    ].join('\n')
+    const next = front + '\n' + body.replace(/^\r?\n+/, '')
+    await fs.writeFile(file, next, 'utf8')
+    return { summaryZh, keywords: list }
+  }
+
+  async function writeSkillProjectMeta(dir, meta) {
+    await fs.writeFile(path.join(dir, SKILL_PROJECT_META), JSON.stringify(meta, null, 2), 'utf8')
+  }
+
+  async function readSkillProjectMeta(dir) {
+    try {
+      return JSON.parse(await fs.readFile(path.join(dir, SKILL_PROJECT_META), 'utf8'))
+    } catch {
+      return null
+    }
+  }
+
+  /** Install every skill of a repository as one project and classify it. */
+  async function installProjectFromRepo(token, request_) {
+    const repo = String(request_.repo || '').trim()
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('仓库要写成 owner/name 的形式')
+    let ref = String(request_.ref || '').trim()
+    if (!ref) {
+      const info = await request(token, 'GET', '/repos/' + repo)
+      if (!info.ok) throw new Error('读取仓库失败：' + describe(info))
+      ref = info.data?.default_branch || 'main'
+    }
+    const commit = await request(token, 'GET', '/repos/' + repo + '/commits/' + encodeURIComponent(ref))
+    const commitSha = commit.ok ? commit.data?.sha || null : null
+    const treeRef = commitSha || ref
+    const tree = await request(token, 'GET', '/repos/' + repo + '/git/trees/' + encodeURIComponent(treeRef) + '?recursive=1')
+    if (!tree.ok) throw new Error('读取仓库文件树失败：' + describe(tree))
+    const all = Array.isArray(tree.data?.tree) ? tree.data.tree : []
+    const dirs = []
+    for (const entry of all) {
+      if (entry.type !== 'blob') continue
+      const p = entry.path
+      if (p === 'SKILL.md') dirs.push('')
+      else if (p.endsWith('/SKILL.md')) dirs.push(p.slice(0, -'/SKILL.md'.length))
+    }
+    const unique = Array.from(new Set(dirs)).filter((dir) => dir.split('/').length <= 3)
+    if (unique.length === 0) throw new Error('这个仓库里没有找到任何 SKILL.md，无法作为技能项目安装')
+    if (unique.length > MAX_PROJECT_SKILLS) {
+      throw new Error(`这个仓库有 ${unique.length} 个技能，超过 ${MAX_PROJECT_SKILLS} 个上限`)
+    }
+
+    const repoInfo = await request(token, 'GET', '/repos/' + repo)
+    const repoData = repoInfo.ok ? repoInfo.data : {}
+    const installed = []
+    for (const dir of unique) {
+      const skill = await installSkillFromRepo(token, { repo, ref, dir })
+      installed.push(skill)
+    }
+
+    const repoText = [
+      repo,
+      repoData.description || '',
+      (repoData.topics || []).join(' '),
+      repoData.topics ? '' : '',
+      ...installed.map((skill) => `${skill.name} ${skill.description || ''}`),
+    ].join(' ')
+    const category = classifyProject(repoText)
+    const keywords = collectKeywords(
+      [
+        (repoData.topics || []).join(' '),
+        repoData.description || '',
+        ...installed.map((skill) => `${skill.name} ${skill.description || ''}`),
+      ],
+      14,
+    )
+    const summaryZh =
+      ZH_REPOS[repo] ||
+      (hasCjk(repoData.description || '')
+        ? firstSentence(repoData.description, 90)
+        : `「${repo}」技能合集：${installed.map((skill) => skill.name).join('、')}，共 ${installed.length} 个技能，装好后 AI 可直接调用。`)
+
+    const skills = []
+    for (const skill of installed) {
+      const dir = path.join(skillsRoot(), skill.name)
+      const summary = skillSummaryZh(skill, category.id)
+      const sub = subcategoryOf(`${skill.name} ${skill.description || ''}`, category.id)
+      const ownWords = collectKeywords([`${skill.name} ${skill.description || ''}`], 8)
+      const skillKeywords = Array.from(new Set([...ownWords, ...keywords.slice(0, 6)]))
+      await enrichSkillFrontMatter(dir, { summaryZh: summary, keywords: skillKeywords })
+      await writeSkillProjectMeta(dir, {
+        project: repo,
+        category: category.id,
+        categoryLabel: category.label,
+        subcategory: sub ? sub.id : null,
+        subcategoryLabel: sub ? sub.label : null,
+        summaryZh: summary,
+        keywords: skillKeywords,
+        installedAt: new Date().toISOString(),
+      })
+      skills.push({
+        name: skill.name,
+        dirInRepo: skill.dir === '' ? null : skill.dir,
+        summaryZh: summary,
+        keywords: skillKeywords,
+        fileCount: skill.fileCount,
+        subcategory: sub ? sub.id : '',
+        subcategoryLabel: sub ? sub.label : '',
+      })
+    }
+
+    const index = await loadProjectIndex()
+    index.projects[repo] = {
+      repo,
+      ref,
+      commitSha,
+      category: category.id,
+      categoryLabel: category.label,
+      summaryZh,
+      keywords,
+      installedAt: new Date().toISOString(),
+      skills,
+    }
+    await saveProjectIndex(index)
+    return index.projects[repo]
+  }
+
+  async function listProjects() {
+    const index = await loadProjectIndex()
+    const projects = []
+    for (const [repo, project] of Object.entries(index.projects)) {
+      const skills = []
+      for (const skill of project.skills || []) {
+        const dir = path.join(skillsRoot(), skill.name)
+        const exists = await fs.stat(dir).then((stat) => stat.isDirectory(), () => false)
+        const disk = exists ? await readSkillDir(skill.name) : undefined
+        const categoryId = project.category || 'other'
+        const sub = subcategoryOf(`${skill.name} ${disk ? disk.description || '' : ''}`, categoryId)
+        skills.push(
+          Object.assign({}, skill, {
+            installed: exists,
+            summaryZh: disk ? skillSummaryZh({ ...disk, name: skill.name }, categoryId) : skill.summaryZh,
+            subcategory: sub ? sub.id : skill.subcategory || '',
+            subcategoryLabel: sub ? sub.label : skill.subcategoryLabel || '',
+          }),
+        )
+      }
+      projects.push(
+        Object.assign({}, project, {
+          skills,
+          summaryZh: ZH_REPOS[repo] || project.summaryZh,
+          categoryLabel: (CATEGORY_TABLE.find((entry) => entry.id === project.category) || CATEGORY_OTHER).label,
+        }),
+      )
+    }
+    projects.sort((a, b) => String(b.installedAt || '').localeCompare(String(a.installedAt || '')))
+    const categories = []
+    for (const project of projects) {
+      const found = categories.find((entry) => entry.id === project.category)
+      if (found) found.count += 1
+      else categories.push({ id: project.category, label: project.categoryLabel, count: 1 })
+    }
+    return { projects, categories, root: skillsRoot() }
+  }
+
+  /**
+   * Re-download installed skills whose upstream commit moved on, so the skill
+   * catalogue follows the repository instead of freezing at install time.
+   * Skills that belong to a known project are refreshed through the project
+   * path, which also rewrites the Chinese summary and the AI keywords.
+   */
+  async function refreshInstalledSkills(token, options) {
+    const opts = options && typeof options === 'object' ? options : {}
+    const onlyRepo = String(opts.repo || '').trim()
+    const result = { checked: 0, updated: [], errors: [] }
+    if (!token) return result
+    const skills = await listSkills()
+    const byRepo = new Map()
+    for (const skill of skills) {
+      if (!skill.repo || !skill.commitSha) continue
+      if (onlyRepo && skill.repo !== onlyRepo) continue
+      if (!byRepo.has(skill.repo)) byRepo.set(skill.repo, [])
+      byRepo.get(skill.repo).push(skill)
+    }
+    if (byRepo.size === 0) return result
+    const index = await loadProjectIndex()
+    for (const [repo, group] of byRepo) {
+      result.checked += group.length
+      try {
+        const ref = group[0].ref || null
+        let target = ref
+        if (!target) {
+          const info = await request(token, 'GET', '/repos/' + repo)
+          target = info.ok ? info.data?.default_branch || 'main' : 'main'
+        }
+        const head = await request(token, 'GET', '/repos/' + repo + '/commits/' + encodeURIComponent(target))
+        if (!head.ok) {
+          result.errors.push({ repo, error: describe(head) })
+          continue
+        }
+        const headSha = head.data?.sha || null
+        if (!headSha) continue
+        const stale = group.filter((skill) => skill.commitSha !== headSha)
+        if (stale.length === 0) continue
+        if (index.projects[repo]) {
+          const project = await installProjectFromRepo(token, { repo, ref: target })
+          for (const skill of project.skills || []) result.updated.push({ repo, name: skill.name })
+        } else {
+          for (const skill of stale) {
+            const fresh = await installSkillFromRepo(token, { repo, ref: target, dir: skill.dirInRepo || '' })
+            result.updated.push({ repo, name: fresh.name })
+          }
+        }
+      } catch (error) {
+        result.errors.push({ repo, error: String(error?.message || error) })
+      }
+    }
+    return result
+  }
+
+  async function removeProject(repo) {
+    const key = String(repo || '').trim()
+    const index = await loadProjectIndex()
+    const project = index.projects[key]
+    if (!project) throw new Error('技能库里没有这个项目')
+    for (const skill of project.skills || []) {
+      await removeSkill(skill.name).catch(() => undefined)
+    }
+    delete index.projects[key]
+    await saveProjectIndex(index)
+    return { ok: true, repo: key, removed: (project.skills || []).length }
+  }
+
+  async function updateProjectMeta(repo, patch) {
+    const key = String(repo || '').trim()
+    const index = await loadProjectIndex()
+    const project = index.projects[key]
+    if (!project) throw new Error('技能库里没有这个项目')
+    if (typeof patch.category === 'string') {
+      const known = CATEGORY_TABLE.find((entry) => entry.id === patch.category) || CATEGORY_OTHER
+      project.category = patch.category === 'other' ? 'other' : known.id
+      project.categoryLabel = patch.category === 'other' ? CATEGORY_OTHER.label : known.label
+    }
+    if (typeof patch.summaryZh === 'string' && patch.summaryZh.trim()) {
+      project.summaryZh = patch.summaryZh.trim().slice(0, 200)
+    }
+    if (Array.isArray(patch.keywords)) {
+      project.keywords = patch.keywords.map((word) => String(word || '').trim()).filter(Boolean).slice(0, 16)
+    }
+    await saveProjectIndex(index)
+    return project
   }
 
   /* --------------------------------------------------------------- clones */
@@ -722,6 +1262,43 @@ function setup(ctx) {
     return text || 'git 命令失败（退出码 ' + result.code + '）'
   }
 
+  // 网络抖动（连接被重置/超时）很常见，值得自动重试；授权与仓库不存在不值得重试。
+  const TRANSIENT_GIT_FAILURE =
+    /Connection was reset|Recv failure|Failed to connect|Could not resolve host|Connection timed out|Operation timed out|unexpected disconnect|the remote end hung up|RPC failed|TLS|SSL/i
+
+  function friendlyGitError(text) {
+    const raw = String(text || '').trim()
+    const head = raw.length > 160 ? raw.slice(0, 160) + '…' : raw
+    if (TRANSIENT_GIT_FAILURE.test(raw)) {
+      return (
+        '网络连接中断（不是仓库或令牌的问题）：与 GitHub 的连接被重置或超时，常见于网络波动、代理/VPN 抖动。' +
+        '已自动重试过；稍后再点「同步」即可。如果经常失败，可以给 git 配代理，或设置环境变量 DSH_GITHUB_GIT_BASE=https://gh-proxy.com/https://github.com 走镜像加速。' +
+        '｜原始信息：' +
+        head
+      )
+    }
+    if (/Authentication failed|Invalid username or password|terminal prompts disabled|Permission denied|could not read Username|access denied or repository|Repository not found/i.test(raw)) {
+      return 'GitHub 拒绝访问：私有仓库需要令牌带 repo 权限，公开仓库请确认 owner/name 拼写。｜原始信息：' + head
+    }
+    return raw || 'git 命令失败'
+  }
+
+  /** Run a git command, retrying only when the failure looks like a network blip. */
+  async function runGitWithRetry(args, options, slug, attempts = 3) {
+    let result = null
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (attempt > 0) {
+        jobSet(slug, { label: '网络中断，正在重试', detail: '第 ' + (attempt + 1) + '/' + attempts + ' 次尝试' })
+        await new Promise((resolve) => setTimeout(resolve, attempt * 2500))
+      }
+      result = await runGit(args, options)
+      if (result.code === 0) return result
+      const text = String(result.stderr || '') + '\n' + String(result.stdout || '')
+      if (!TRANSIENT_GIT_FAILURE.test(text)) return result
+    }
+    return result
+  }
+
   async function readCloneMeta(dir) {
     try {
       const raw = await fs.readFile(path.join(dir, '.git', CLONE_META), 'utf8')
@@ -809,7 +1386,12 @@ function setup(ctx) {
     const token = await readToken().catch(() => undefined)
     await Promise.all(
       clones.map((clone) =>
-        runGit(['fetch', '--quiet', '--prune', '--tags', 'origin'], { cwd: clone.dir, token, timeout: 120000 }).catch(() => null),
+        runGitWithRetry(
+          ['fetch', '--quiet', '--prune', '--tags', 'origin'],
+          { cwd: clone.dir, token, timeout: 120000 },
+          clone.repo,
+          2,
+        ).catch(() => null),
       ),
     )
   }
@@ -833,16 +1415,17 @@ function setup(ctx) {
     if (ref) args.push('--branch', ref)
     args.push(cloneUrl(repo), dir)
     jobSet(repo, { phase: 'clone', percent: 0, step: 0, label: '连接 GitHub', detail: '连接 GitHub', done: false, error: null, startedAt: Date.now() })
-    const result = await runGit(args, {
+    const result = await runGitWithRetry(args, {
       token,
       timeout: CLONE_TIMEOUT,
       stallMs: CLONE_STALL_MS,
       onOutput: progressReporter(repo, 'clone'),
-    })
+    }, repo)
     if (result.code !== 0) {
       await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
-      jobFinish(repo, { percent: 0, step: 0, label: '失败', detail: '失败', error: '克隆失败：' + gitFailure(result) })
-      throw new Error('克隆失败：' + gitFailure(result))
+      const failure = friendlyGitError(gitFailure(result))
+      jobFinish(repo, { percent: 0, step: 0, label: '失败', detail: '失败', error: '克隆失败：' + failure })
+      throw new Error('克隆失败：' + failure)
     }
     const state = await cloneStatus(dir)
     jobFinish(repo, { percent: 100, step: 100, label: '完成', detail: '完成' })
@@ -866,15 +1449,19 @@ function setup(ctx) {
     const meta = await readCloneMeta(dir)
     if (!meta) throw new Error(slug + ' 还没有克隆到本机')
     jobSet(slug, { phase: 'sync', percent: 0, step: 0, label: '连接 GitHub', detail: '连接 GitHub', done: false, error: null, startedAt: Date.now() })
-    const fetch = await runGit(['fetch', '--progress', '--prune', '--tags', 'origin'], {
-      cwd: dir,
-      token,
-      timeout: CLONE_TIMEOUT,
-      stallMs: CLONE_STALL_MS,
-      onOutput: progressReporter(slug, 'sync'),
-    })
+    const fetch = await runGitWithRetry(
+      ['fetch', '--progress', '--prune', '--tags', 'origin'],
+      {
+        cwd: dir,
+        token,
+        timeout: CLONE_TIMEOUT,
+        stallMs: CLONE_STALL_MS,
+        onOutput: progressReporter(slug, 'sync'),
+      },
+      slug,
+    )
     if (fetch.code !== 0) {
-      meta.lastError = gitFailure(fetch)
+      meta.lastError = friendlyGitError(gitFailure(fetch))
       meta.lastSync = new Date().toISOString()
       await writeCloneMeta(dir, meta)
       jobFinish(slug, { percent: 0, step: 0, label: '失败', detail: '失败', error: '拉取失败：' + meta.lastError })
@@ -964,6 +1551,8 @@ function setup(ctx) {
         /* per-clone failures stay in that clone's metadata */
       }
     }
+    // Installed skills follow their repository too, whether or not it is cloned.
+    await refreshInstalledSkills(token).catch(() => undefined)
   }
 
   function scheduleAutoSync() {
@@ -1120,6 +1709,95 @@ function setup(ctx) {
           return json(res, 200, result)
         } catch (error) {
           return json(res, 400, { ok: false, error: String(error?.message || error) })
+        }
+      },
+    },
+    {
+      path: `${BASE}/skills/projects`,
+      handler: async (req, res) => {
+        if (!sameOrigin(req)) return json(res, 403, { error: '来源不受信任' })
+        try {
+          return json(res, 200, await listProjects())
+        } catch (error) {
+          return json(res, 500, { error: String(error?.message || error) })
+        }
+      },
+    },
+    {
+      path: `${BASE}/skills/projects/install`,
+      handler: async (req, res) => {
+        if (!sameOrigin(req)) return json(res, 403, { error: '来源不受信任' })
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+        let body
+        try {
+          body = await readJsonBody(req)
+        } catch (error) {
+          return json(res, 400, { error: String(error.message || error) })
+        }
+        const token = await readToken()
+        if (!token) return json(res, 401, { error: '尚未连接 GitHub' })
+        try {
+          const project = await installProjectFromRepo(token, body && typeof body === 'object' ? body : {})
+          return json(res, 200, { ok: true, project })
+        } catch (error) {
+          return json(res, 400, { ok: false, error: String(error?.message || error) })
+        }
+      },
+    },
+    {
+      path: `${BASE}/skills/projects/remove`,
+      handler: async (req, res) => {
+        if (!sameOrigin(req)) return json(res, 403, { error: '来源不受信任' })
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+        let body
+        try {
+          body = await readJsonBody(req)
+        } catch (error) {
+          return json(res, 400, { error: String(error.message || error) })
+        }
+        try {
+          return json(res, 200, await removeProject(body?.repo))
+        } catch (error) {
+          return json(res, 400, { ok: false, error: String(error?.message || error) })
+        }
+      },
+    },
+    {
+      path: `${BASE}/skills/projects/meta`,
+      handler: async (req, res) => {
+        if (!sameOrigin(req)) return json(res, 403, { error: '来源不受信任' })
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+        let body
+        try {
+          body = await readJsonBody(req)
+        } catch (error) {
+          return json(res, 400, { error: String(error.message || error) })
+        }
+        try {
+          const project = await updateProjectMeta(body?.repo, body || {})
+          return json(res, 200, { ok: true, project })
+        } catch (error) {
+          return json(res, 400, { ok: false, error: String(error?.message || error) })
+        }
+      },
+    },
+    {
+      path: `${BASE}/skills/update`,
+      handler: async (req, res) => {
+        if (!sameOrigin(req)) return json(res, 403, { error: '来源不受信任' })
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+        let body
+        try {
+          body = await readJsonBody(req)
+        } catch (error) {
+          return json(res, 400, { error: String(error.message || error) })
+        }
+        const token = await readToken()
+        if (!token) return json(res, 401, { error: '尚未连接 GitHub' })
+        try {
+          return json(res, 200, await refreshInstalledSkills(token, body && typeof body === 'object' ? body : {}))
+        } catch (error) {
+          return json(res, 500, { ok: false, error: String(error?.message || error) })
         }
       },
     },
@@ -1353,6 +2031,33 @@ function setup(ctx) {
         },
         output: output({ type: 'object' }),
         execute: async (args) => removeSkill(args?.name),
+      },
+      {
+        name: 'github_skill_project',
+        description:
+          'Manage whole-repository skill projects. list returns installed projects with their category, ' +
+          'Chinese summary and retrieval keywords; install installs every SKILL.md of a repository as one ' +
+          'project (skills stay individually loadable) and writes Chinese summaries plus keywords into each ' +
+          'SKILL.md; remove uninstalls the whole project.',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['list', 'install', 'remove'], description: 'What to do' },
+            repo: { type: 'string', description: 'owner/name (install and remove)' },
+            ref: { type: 'string', description: 'Branch, tag, or commit; default branch when omitted' },
+          },
+          required: ['action'],
+          additionalProperties: false,
+        },
+        output: output({ type: 'object' }),
+        execute: async (args) => {
+          const action = String(args?.action || 'list')
+          if (action === 'list') return listProjects()
+          if (action === 'remove') return removeProject(args?.repo)
+          const token = await readToken()
+          if (!token) throw new Error('GitHub 尚未连接：请先在 GitHub 面板里填入令牌')
+          return installProjectFromRepo(token, { repo: args?.repo, ref: args?.ref })
+        },
       },
       {
         name: 'github_clone_list',

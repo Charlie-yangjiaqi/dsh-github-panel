@@ -17,7 +17,7 @@ A GitHub console for [DeepSeek Harness](https://github.com/deepseek-ai) that run
 | Social | Who you follow, who follows you, your organizations |
 | Activity | Your public events and the events of the people you follow |
 | Clone | Clone a repo from your repositories, stars or search to disk, then keep it up to date automatically |
-| Skills | Install a skill from any GitHub repository into `~/.dsh/skills`, so the agent can reuse it |
+| Skills | Install a whole GitHub skill project into `~/.dsh/skills`, grouped by category with Chinese descriptions and AI search keywords, and keep it in step with upstream |
 
 Data is read from the GitHub REST API on every refresh, so the panel and github.com never drift apart. A background refresh runs every 60 seconds while the panel is visible.
 
@@ -52,7 +52,7 @@ The panel does not share the token with anything else, and **断开** / **Discon
 
 ## Tools for the agent
 
-The host half registers seven tools, so the agent can drive GitHub and the clone cache on its own:
+The host half registers eight tools, so the agent can drive GitHub, the clone cache and the skill library on its own:
 
 | Tool | Purpose |
 | --- | --- |
@@ -60,6 +60,7 @@ The host half registers seven tools, so the agent can drive GitHub and the clone
 | `github_skill_list` | List skills in the local catalog with their source repository |
 | `github_skill_install` | Install `owner/repo` (optionally a `dir` and `ref`) into `~/.dsh/skills` |
 | `github_skill_remove` | Remove an installed skill by name |
+| `github_skill_project` | `list`, `install` or `remove` a whole skill project (`repo`), with category, summary and keywords |
 | `github_clone_list` | List local clones with branch, upstream, ahead/behind and dirty state |
 | `github_clone` | Clone `owner/repo` (optionally a `ref`) into the clone root |
 | `github_clone_sync` | Fetch and fast-forward one clone, or `all: true` |
@@ -75,6 +76,22 @@ Clones live in `$DSH_HOME/github-clones/<owner>/<repo>` (override with `DSH_GITH
 Auto-sync runs every 15 minutes by default and can be switched off or re-timed in the panel. The panel shows a live progress bar (overall percentage plus the current git phase) while cloning or fetching.
 
 Git must be installed and on `PATH`. On Windows the panel runs git with `http.sslBackend=openssl`, which avoids the Schannel `SEC_E_NO_CREDENTIALS` failure some machines hit.
+
+## Skills library
+
+Cloning a repository does **not** install its skills: the agent only loads `~/.dsh/skills/<name>/SKILL.md`. The panel therefore has two separate actions:
+
+- **克隆** puts the repository on disk under `$DSH_HOME/github-clones`.
+- **安装** (on every clone row, or the install form in the *技能* view) pulls every `SKILL.md` of that repository into the skill catalog as one *project*.
+
+Each installed project and skill gets:
+
+- a Chinese one-line description, so the panel is readable without English;
+- a purpose category (漫剧 / 图像设计 / 视频音频 / 开发工具 / 文档办公 / 数据分析 / 自动化) and a sub-category inside it (for example 漫剧 → 大纲改编 / 剧本台词 / 人物角色 / 美术场景 / 分镜镜头 / 站位调度);
+- AI search keywords written into `whenToUse`, which is what the agent matches on when it looks for a skill;
+- an entry in `$DSH_HOME/plugin-data/github-panel-projects.json` plus a `.dsh-project.json` sidecar inside the skill directory.
+
+The *技能* view lists projects with their skills collapsed, and the installed-skills section grouped by category → sub-category. **检查更新** compares each installed project with its upstream commit and re-downloads the ones that moved; the 15-minute auto-sync does the same, so the catalog never lags behind the repository. Clones whose skills are already installed show a green *已安装* badge instead of the install button.
 
 ## Guest mode (invite code)
 
@@ -132,13 +149,13 @@ dsh plugin --profile web add github:gpta76/dsh-github-panel
 - **仓库**：列出你有权限的仓库，搜索、浏览目录、预览文件（300 KB 以内）。
 - **克隆**：从「我的仓库 / 星标 / 搜索」一键克隆到 `~/.dsh/github-clones`，显示实时进度条（整体百分比 + 当前 git 阶段）；作者更新后自动 fetch + 快进合并，本地有改动时停下不动你的文件；默认每 15 分钟检查一次，可关闭或改间隔。
 - **星标 / 关注 / 动态**：实时读自 GitHub，星标可一键取消。
-- **技能**：填 `owner/repo`（可加子目录与分支）把含 `SKILL.md` 的技能装进 `~/.dsh/skills`，装完 AI 立刻能用。
+- **技能**：填 `owner/repo`（可加子目录与分支）把含 `SKILL.md` 的技能装进 `~/.dsh/skills`；也可以直接点克隆行上的「安装」，把整个仓库的技能一次性作为「项目」装进来。项目和技能都自动带中文简介、用途大类（漫剧 / 图像设计 / 视频音频 / 开发工具 / 文档办公 / 数据分析 / 自动化）+ 细分小类（如 漫剧 → 大纲改编 / 剧本台词 / 人物角色 / 美术场景 / 分镜镜头 / 站位调度），并写入 AI 检索关键词（`whenToUse`）。「检查更新」和每 15 分钟的自动同步会按上游最新提交重装，技能库不会落后；已安装的克隆行显示绿色「已安装」，不再重复出现安装按钮。
 - **通知**：未读列表、单条或全部标记已读、点击跳到对应议题/PR。
 - **访客模式**：连接卡底部的「邀请码」可打开只读的公开数据视图（公开仓库、星标、动态），不需要令牌，也拿不到任何私有内容。
 
 ### 给 AI 的工具
 
-`github_api`、`github_skill_list`、`github_skill_install`、`github_skill_remove`、`github_clone_list`、`github_clone`、`github_clone_sync`——AI 可以直接调用它们读接口、装技能、克隆与同步仓库。
+`github_api`、`github_skill_list`、`github_skill_install`、`github_skill_remove`、`github_skill_project`、`github_clone_list`、`github_clone`、`github_clone_sync`——AI 可以直接调用它们读接口、装技能项目、克隆与同步仓库。
 
 ### 说明
 

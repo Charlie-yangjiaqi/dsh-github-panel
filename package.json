@@ -1,7 +1,7 @@
 {
   "name": "dsh-github-panel",
-  "version": "1.1.0",
-  "description": "GitHub console for DeepSeek Harness: sign in once with a personal access token and work with repositories, issues, pull requests, commits, notifications, stars, cloning and skills inside the app.",
+  "version": "1.2.0",
+  "description": "GitHub console for DeepSeek Harness: token sign-in, repositories, issues, pull requests, commits, notifications, stars, activity, cloning with auto-sync, and a skills library that installs GitHub skill projects with categories and AI keywords.",
   "type": "module",
   "license": "MIT",
   "exports": {
@@ -26,7 +26,10 @@
     "git",
     "issues",
     "pull-requests",
-    "clone"
+    "clone",
+    "skills",
+    "agent-skills",
+    "skill-library"
   ],
   "repository": {
     "type": "git",
