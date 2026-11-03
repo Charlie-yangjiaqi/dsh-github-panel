@@ -1,0 +1,48 @@
+{
+  "name": "dsh-github-panel",
+  "version": "1.1.0",
+  "description": "GitHub console for DeepSeek Harness: sign in once with a personal access token and work with repositories, issues, pull requests, commits, notifications, stars, cloning and skills inside the app.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek",
+    "harness",
+    "github",
+    "git",
+    "issues",
+    "pull-requests",
+    "clone"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gpta76/dsh-github-panel.git"
+  },
+  "homepage": "https://github.com/gpta76/dsh-github-panel#readme",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}

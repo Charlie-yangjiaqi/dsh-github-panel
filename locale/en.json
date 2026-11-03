@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "GitHub Console",
+    "description": "Connect a GitHub account with a personal access token and manage repositories, issues, pull requests, commits and notifications without opening github.com."
+  }
+}

@@ -1,0 +1,3 @@
+- insert:
+    - id: github-panel
+      name: 'dsh-github-panel'

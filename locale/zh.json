@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "GitHub 控制台",
+    "description": "输入一次 GitHub 个人访问令牌即可连接账号，在应用内管理仓库、议题、拉取请求、提交与通知，无需打开 github.com。"
+  }
+}

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="GitHub console">
+  <defs>
+    <linearGradient id="ghp-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101a26"/>
+      <stop offset="1" stop-color="#1e2c3d"/>
+    </linearGradient>
+    <linearGradient id="ghp-line" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#ghp-bg)"/>
+  <g fill="none" stroke="url(#ghp-line)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 25v14"/>
+    <path d="M21 33h8a7 7 0 0 0 7-7v-1"/>
+  </g>
+  <g fill="#e8f0fb">
+    <circle cx="21" cy="20" r="5"/>
+    <circle cx="21" cy="44" r="5"/>
+    <circle cx="36" cy="20" r="5"/>
+  </g>
+  <g fill="#0f172a">
+    <circle cx="21" cy="20" r="1.7"/>
+    <circle cx="21" cy="44" r="1.7"/>
+    <circle cx="36" cy="20" r="1.7"/>
+  </g>
+</svg>
