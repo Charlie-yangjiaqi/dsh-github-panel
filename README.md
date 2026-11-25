@@ -63,19 +63,28 @@ The host half registers eight tools, so the agent can drive GitHub, the clone ca
 | `github_skill_project` | `list`, `install` or `remove` a whole skill project (`repo`), with category, summary and keywords |
 | `github_clone_list` | List local clones with branch, upstream, ahead/behind and dirty state |
 | `github_clone` | Clone `owner/repo` (optionally a `ref` and a target `dir`) into the clone root or any absolute folder |
-| `github_clone_sync` | Fetch and fast-forward one clone, or `all: true` |
+| `github_repo_bind` | Bind `owner/repo` to an absolute folder; empty or missing folders are cloned into, existing checkouts are verified by remote URL |
+| `github_repo_unbind` | Stop syncing a bound repository, leaving the files on disk |
+| `github_clone_sync` | Two-way sync: pull when the remote is ahead, push when the local branch is ahead; one repo or `all: true` |
 
 ## Cloning
 
-Clones live in `$DSH_HOME/github-clones/<owner>/<repo>` by default, but every clone can pick its own folder: pressing 克隆 opens a target-directory field (leave it empty for the default), and the agent can pass `dir` to `github_clone`. The default root is configurable too (自动同步 card → 默认克隆目录, `DSH_GITHUB_CLONE_DIR`, saved in `plugin-data/github-panel-clones.json`). An absolute path that already ends with the repository name is used as-is; any other absolute path is treated as the parent folder and receives a directory named after the repository. Every location is recorded in `$DSH_HOME/plugin-data/github-panel-clone-index.json`, so listing, syncing and removing still find clones that live outside the default root.
+## Binding a repository to a folder
 
-Sync is fetch + `merge --ff-only`:
+Open 我的仓库 and press 绑定 on a repository to tie it to a local folder. The folder may be empty, missing (it is cloned into), or an existing checkout of the same repository — the remote URL is verified before binding. Every repository keeps its own folder, so projects never share one root. `github_repo_bind` exposes the same action to the agent, and `github_repo_unbind` stops tracking a folder without deleting it.
 
-- a clean clone follows the upstream branch automatically;
-- a clone with local changes is left alone and reported as *dirty*, so your edits are never overwritten;
-- a diverged clone is reported instead of being reset.
+Clones made without binding still work: they land under `$DSH_HOME/github-clones/<owner>/<repo>` (change the default root in the 自动同步 card → 默认克隆目录 or with `DSH_GITHUB_CLONE_DIR`), or wherever the `dir` argument of `github_clone` points. Every location is recorded in `$DSH_HOME/plugin-data/github-panel-clone-index.json`, so listing, syncing and removing still find folders outside the default root.
 
-Auto-sync runs every 15 minutes by default and can be switched off or re-timed in the panel. The panel shows a live progress bar (overall percentage plus the current git phase) while cloning or fetching.
+## Two-way sync
+
+同步 checks the bound folder against the remote and moves whichever side is behind:
+
+- remote ahead → `git merge --ff-only` pulls it down;
+- local branch ahead → `git push origin HEAD` sends the commits up;
+- both moved → reported as diverged, nothing is overwritten;
+- uncommitted local changes are reported but never discarded — only committed work is pushed.
+
+Auto-sync runs every 15 minutes by default and can be switched off or re-timed in the panel. The panel shows a live progress bar while cloning or fetching.
 
 Git must be installed and on `PATH`. On Windows the panel runs git with `http.sslBackend=openssl`, which avoids the Schannel `SEC_E_NO_CREDENTIALS` failure some machines hit.
 
@@ -149,7 +158,8 @@ dsh plugin --profile web add github:gpta76/dsh-github-panel
 ### 功能
 
 - **仓库**：列出你有权限的仓库，搜索、浏览目录、预览文件（300 KB 以内）。
-- **克隆**：点「克隆」后先填目标目录——每个仓库可以单独落在任意绝对路径（留空则用默认 `~/.dsh/github-clones`），AI 也能用 `github_clone` 的 `dir` 参数指定；「已克隆」页的自动同步卡片里可改「默认克隆目录」（比如 `D:\projects`）；显示实时进度条（整体百分比 + 当前 git 阶段）；作者更新后自动 fetch + 快进合并，本地有改动时停下不动你的文件；默认每 15 分钟检查一次，可关闭或改间隔。克隆位置记在 `~/.dsh/plugin-data/github-panel-clone-index.json`，因此列表、同步、删除都能找到默认目录之外的克隆。
+- **克隆 / 绑定**：在「我的仓库」里给每个仓库点「绑定」，选一个本地文件夹——空文件夹、还不存在的（会克隆进去）、或已经是这个仓库的检出都行，绑定前会校验远端地址。每个仓库各绑各的，不共用一个根目录；AI 也能用 `github_repo_bind` / `github_repo_unbind` 做同样的事。不绑定直接克隆也可以，落在默认 `~/.dsh/github-clones`（可在自动同步卡片里改「默认克隆目录」，或让 AI 用 `github_clone` 的 `dir` 指定）；克隆位置记在 `~/.dsh/plugin-data/github-panel-clone-index.json`。
+- **同步（双向）**：点「同步」先 fetch 再看方向——远端领先就 `merge --ff-only` 拉下来，本地领先就 `push` 推上去，两边都动过则报「分叉」不覆盖；本地未提交的改动只提示、不丢弃，推送的是已提交内容。默认每 15 分钟自动检查一次，可关闭或改间隔。
 - **星标 / 关注 / 动态**：实时读自 GitHub，星标可一键取消。
 - **技能**：填 `owner/repo`（可加子目录与分支）把含 `SKILL.md` 的技能装进 `~/.dsh/skills`；也可以直接点克隆行上的「安装」，把整个仓库的技能一次性作为「项目」装进来。项目和技能都自动带中文简介、用途大类（漫剧 / 图像设计 / 视频音频 / 开发工具 / 文档办公 / 数据分析 / 自动化）+ 细分小类（如 漫剧 → 大纲改编 / 剧本台词 / 人物角色 / 美术场景 / 分镜镜头 / 站位调度），并写入 AI 检索关键词（`whenToUse`）。「检查更新」和每 15 分钟的自动同步会按上游最新提交重装，技能库不会落后；已安装的克隆行显示绿色「已安装」，不再重复出现安装按钮。
 - **通知**：未读列表、单条或全部标记已读、点击跳到对应议题/PR。
@@ -157,7 +167,7 @@ dsh plugin --profile web add github:gpta76/dsh-github-panel
 
 ### 给 AI 的工具
 
-`github_api`、`github_skill_list`、`github_skill_install`、`github_skill_remove`、`github_skill_project`、`github_clone_list`、`github_clone`、`github_clone_sync`——AI 可以直接调用它们读接口、装技能项目、克隆与同步仓库。
+`github_api`、`github_skill_list`、`github_skill_install`、`github_skill_remove`、`github_skill_project`、`github_clone_list`、`github_clone`、`github_repo_bind`、`github_repo_unbind`、`github_clone_sync`——AI 可以直接调用它们读接口、装技能项目、绑定文件夹、克隆与双向同步仓库。
 
 ### 说明
 

@@ -1568,27 +1568,43 @@ function setup(ctx) {
       jobFinish(slug, { percent: 0, step: 0, label: '失败', detail: '失败', error: '拉取失败：' + meta.lastError })
       throw new Error('拉取失败：' + meta.lastError)
     }
-    const state = await cloneStatus(dir)
+    let before = await cloneStatus(dir)
     let action = 'up-to-date'
-    if (state.dirty) {
-      action = 'dirty'
-    } else if (state.upstream && (state.behind || 0) > 0) {
+    let detail = ''
+    const behind = before.behind || 0
+    const ahead = before.ahead || 0
+    if (before.upstream && behind > 0 && ahead > 0) {
+      action = 'diverged'
+      detail = '本地领先 ' + ahead + ' 个提交、落后 ' + behind + ' 个提交，需要手动合并'
+      meta.lastError = detail
+    } else if (before.upstream && behind > 0) {
+      jobSet(slug, { phase: 'sync', percent: 40, step: 40, label: '拉取更新', detail: '拉取更新', done: false })
       const merge = await runGit(['merge', '--ff-only', '@{u}'], { cwd: dir, token })
       if (merge.code === 0) {
-        action = 'updated'
+        action = 'pulled'
       } else {
         action = 'diverged'
         meta.lastError = gitFailure(merge)
       }
+    } else if (before.upstream && ahead > 0) {
+      jobSet(slug, { phase: 'sync', percent: 40, step: 40, label: '推送提交', detail: '推送提交', done: false })
+      const push = await runGit(['push', 'origin', 'HEAD'], { cwd: dir, token, timeout: CLONE_TIMEOUT })
+      if (push.code === 0) {
+        action = 'pushed'
+      } else {
+        action = 'push-failed'
+        meta.lastError = gitFailure(push)
+      }
     }
     meta.lastSync = new Date().toISOString()
-    if (action === 'updated' || action === 'up-to-date') meta.lastError = null
+    if (action === 'pulled' || action === 'pushed' || action === 'up-to-date') meta.lastError = null
     await writeCloneMeta(dir, meta)
     const after = await cloneStatus(dir)
     jobFinish(slug, { percent: 100, step: 100, label: '完成', detail: '完成' })
     return {
       repo: slug,
       action,
+      detail: detail || null,
       branch: after.branch,
       behind: after.behind,
       ahead: after.ahead,
@@ -1597,6 +1613,118 @@ function setup(ctx) {
       lastSync: meta.lastSync,
       error: meta.lastError || null,
     }
+  }
+
+  /** Compare a remote URL with owner/name regardless of protocol or trailing .git. */
+  function remoteMatchesRepo(url, repo) {
+    const text = String(url || '').trim()
+    if (!text) return false
+    const cleaned = text
+      .replace(/^git@[^:]+:/i, '')
+      .replace(/^ssh:\/\/git@[^/]+\//i, '')
+      .replace(/^https?:\/\/[^/]+\//i, '')
+      .replace(/\.git$/i, '')
+      .replace(/\/+$/, '')
+    return cleaned.toLowerCase() === String(repo).toLowerCase()
+  }
+
+  /**
+   * Bind a repository to a local folder. An existing checkout must already point
+   * at the repository; an empty or missing folder is cloned into. Binding is what
+   * makes the folder show up in 我的仓库 with pull/push state.
+   */
+  async function bindRepo(token, request_) {
+    const repo = String(request_?.repo || '').trim()
+    if (!validRepo(repo)) throw new Error('仓库要写成 owner/name 的形式')
+    const raw = String(request_?.dir || '').trim()
+    if (!raw) throw new Error('先填一个要绑定的文件夹')
+    if (!path.isAbsolute(raw)) throw new Error('文件夹要写绝对路径，例如 D:\\projects\\my-app')
+    if (!(await gitInfo())) throw new Error('本机没有找到 git，请先安装 Git 并加入 PATH')
+    const dir = path.resolve(raw)
+
+    let exists = false
+    try {
+      await fs.access(path.join(dir, '.git'))
+      exists = true
+    } catch {
+      exists = false
+    }
+
+    if (exists) {
+      const remote = await runGit(['config', '--get', 'remote.origin.url'], { cwd: dir, timeout: 20000 })
+      const url = remote.code === 0 ? String(remote.stdout).trim() : ''
+      if (!remoteMatchesRepo(url, repo)) {
+        throw new Error('这个文件夹已经是别的仓库：' + (url || '没有 origin 远端'))
+      }
+    } else {
+      let entries = []
+      try {
+        entries = await fs.readdir(dir)
+      } catch {
+        entries = []
+      }
+      if (entries.length > 0) throw new Error('这个文件夹不是空的，换一个空文件夹或新建一个')
+      const ref = String(request_?.ref || '').trim()
+      if (ref && !/^[A-Za-z0-9._\/-]+$/.test(ref)) throw new Error('分支名不合法')
+      await fs.mkdir(path.dirname(dir), { recursive: true })
+      const args = ['clone', '--progress', '--single-branch']
+      if (ref) args.push('--branch', ref)
+      args.push(cloneUrl(repo), dir)
+      jobSet(repo, { phase: 'clone', percent: 0, step: 0, label: '连接 GitHub', detail: '连接 GitHub', done: false, error: null, startedAt: Date.now() })
+      const result = await runGitWithRetry(args, {
+        token,
+        timeout: CLONE_TIMEOUT,
+        stallMs: CLONE_STALL_MS,
+        onOutput: progressReporter(repo, 'clone'),
+      }, repo)
+      if (result.code !== 0) {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+        const failure = friendlyGitError(gitFailure(result))
+        jobFinish(repo, { percent: 0, step: 0, label: '失败', detail: '失败', error: '克隆失败：' + failure })
+        throw new Error('克隆失败：' + failure)
+      }
+      jobFinish(repo, { percent: 100, step: 100, label: '完成', detail: '完成' })
+    }
+
+    const state = await cloneStatus(dir)
+    const meta = {
+      repo,
+      dir,
+      url: cloneUrl(repo),
+      ref: state.branch || null,
+      clonedAt: new Date().toISOString(),
+      lastSync: new Date().toISOString(),
+      lastError: null,
+      autoSync: true,
+      bound: true,
+    }
+    await writeCloneMeta(dir, meta)
+    await rememberClone(repo, dir)
+    return {
+      repo,
+      dir,
+      branch: state.branch,
+      head: state.head,
+      behind: state.behind,
+      ahead: state.ahead,
+      dirty: state.dirty,
+    }
+  }
+
+  /** Stop tracking a binding without touching the files on disk. */
+  async function unbindRepo(repo) {
+    const slug = String(repo || '').trim()
+    if (!validRepo(slug)) throw new Error('仓库要写成 owner/name 的形式')
+    const index = await readCloneIndex()
+    const dir = typeof index[slug] === 'string' ? path.resolve(index[slug]) : await resolveCloneDir(slug)
+    await forgetClone(slug)
+    const meta = await readCloneMeta(dir).catch(() => null)
+    if (meta) {
+      meta.bound = false
+      meta.autoSync = false
+      await writeCloneMeta(dir, meta).catch(() => {})
+    }
+    return { ok: true, repo: slug, dir }
   }
 
   async function removeClone(repo) {
@@ -1993,6 +2121,44 @@ function setup(ctx) {
       },
     },
     {
+      path: `${BASE}/clones/bind`,
+      handler: async (req, res) => {
+        if (!sameOrigin(req)) return json(res, 403, { error: '来源不受信任' })
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+        let body
+        try {
+          body = await readJsonBody(req)
+        } catch (error) {
+          return json(res, 400, { error: String(error.message || error) })
+        }
+        const token = await readToken().catch(() => undefined)
+        try {
+          const bound = await bindRepo(token, body && typeof body === 'object' ? body : {})
+          return json(res, 200, Object.assign({ ok: true }, bound))
+        } catch (error) {
+          return json(res, 400, { ok: false, error: String(error?.message || error) })
+        }
+      },
+    },
+    {
+      path: `${BASE}/clones/unbind`,
+      handler: async (req, res) => {
+        if (!sameOrigin(req)) return json(res, 403, { error: '来源不受信任' })
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+        let body
+        try {
+          body = await readJsonBody(req)
+        } catch (error) {
+          return json(res, 400, { error: String(error.message || error) })
+        }
+        try {
+          return json(res, 200, Object.assign({ ok: true }, await unbindRepo(body?.repo)))
+        } catch (error) {
+          return json(res, 400, { ok: false, error: String(error?.message || error) })
+        }
+      },
+    },
+    {
       path: `${BASE}/clones/remove`,
       handler: async (req, res) => {
         if (!sameOrigin(req)) return json(res, 403, { error: '来源不受信任' })
@@ -2218,8 +2384,9 @@ function setup(ctx) {
       {
         name: 'github_clone_sync',
         description:
-          'Fast-forward local clones to their upstream: pass one repo as owner/name, or all=true to sync ' +
-          'every clone. Clones with local changes are reported as dirty instead of being overwritten.',
+          'Two-way sync for bound clones: pass one repo as owner/name, or all=true to sync every clone. ' +
+          'Fetches first, then pulls with --ff-only when the remote is ahead, or pushes the local branch ' +
+          'when it is ahead. Diverged clones are reported instead of being reset.',
         parameters: {
           type: 'object',
           properties: {
@@ -2245,6 +2412,41 @@ function setup(ctx) {
           }
           return syncClone(token, args?.repo)
         },
+      },
+      {
+        name: 'github_repo_bind',
+        description:
+          'Bind a GitHub repository to a local folder so the folder shows up under 我的仓库 and stays in ' +
+          'sync. The folder may be empty, missing (it is cloned into), or an existing checkout of the same ' +
+          'repository. After binding, github_clone_sync pulls when the remote is ahead and pushes when the ' +
+          'local branch is ahead.',
+        parameters: {
+          type: 'object',
+          properties: {
+            repo: { type: 'string', description: 'owner/name' },
+            dir: { type: 'string', description: 'Absolute folder to bind, e.g. D:\\\\projects\\\\my-app' },
+            ref: { type: 'string', description: 'Branch to check out when cloning; default branch when omitted' },
+          },
+          required: ['repo', 'dir'],
+          additionalProperties: false,
+        },
+        output: output({ type: 'object' }),
+        execute: async (args) => {
+          const token = await readToken().catch(() => undefined)
+          return bindRepo(token, args || {})
+        },
+      },
+      {
+        name: 'github_repo_unbind',
+        description: 'Stop syncing a bound repository. The files on disk are left untouched.',
+        parameters: {
+          type: 'object',
+          properties: { repo: { type: 'string', description: 'owner/name' } },
+          required: ['repo'],
+          additionalProperties: false,
+        },
+        output: output({ type: 'object' }),
+        execute: async (args) => unbindRepo(args?.repo),
       },
     ]
     for (const definition of tools) {

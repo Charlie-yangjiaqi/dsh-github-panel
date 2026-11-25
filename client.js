@@ -65,6 +65,7 @@ window.__ModuleLoader__.load({
       clones: null,
       cloneRoot: '',
       cloneTarget: null,
+      bindTarget: null,
       cloneGit: null,
       cloneAuto: { enabled: true, minutes: 15 },
       cloneTab: 'clones',
@@ -1451,14 +1452,17 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ repo: repo }),
         })
         const labels = {
-          updated: '已更新到最新提交',
-          'up-to-date': '已经是最新版本',
-          dirty: '有未提交的改动，先提交再同步',
-          diverged: '本地和远端分叉了，需要手动处理',
+          pulled: '远端有新提交，已拉取',
+          pushed: '本地有新提交，已推送',
+          'up-to-date': '两边一致，无需动作',
+          diverged: '本地和远端都领先，需要手动合并',
+          'push-failed': '推送失败',
         }
+        const okAction =
+          payload.action === 'pulled' || payload.action === 'pushed' || payload.action === 'up-to-date'
         set({
           cloneNotice: {
-            kind: payload.action === 'updated' || payload.action === 'up-to-date' ? 'ok' : 'error',
+            kind: okAction ? 'ok' : 'error',
             text: repo + '：' + (labels[payload.action] || payload.action || '同步完成') + (payload.error ? '（' + payload.error + '）' : ''),
           },
         })
@@ -1479,17 +1483,22 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ all: true }),
         })
         const rows = Array.isArray(payload) ? payload : []
-        const updated = rows.filter(function (row) {
-          return row.action === 'updated'
+        const pulled = rows.filter(function (row) {
+          return row.action === 'pulled'
+        }).length
+        const pushed = rows.filter(function (row) {
+          return row.action === 'pushed'
         }).length
         const failed = rows.filter(function (row) {
-          return row.action === 'failed' || row.action === 'diverged' || row.action === 'dirty'
+          return row.action === 'failed' || row.action === 'diverged' || row.action === 'push-failed'
         }).length
         set({
           cloneBusy: {},
           cloneNotice: {
             kind: failed ? 'error' : 'ok',
-            text: '同步了 ' + rows.length + ' 个仓库：' + updated + ' 个更新' + (failed ? '，' + failed + ' 个需要手动处理' : ''),
+            text:
+              '同步了 ' + rows.length + ' 个仓库：拉取 ' + pulled + ' 个、推送 ' + pushed + ' 个' +
+              (failed ? '，' + failed + ' 个需要手动处理' : ''),
           },
         })
         await loadClones(true)
@@ -1515,6 +1524,47 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ repo: repo }),
         })
         set({ notice: '已删除本机克隆 ' + repo, cloneNotice: null })
+        await loadClones(true)
+      } catch (error) {
+        set({ cloneNotice: { kind: 'error', text: messageOf(error) } })
+      }
+    }
+
+    async function bindRepo(repo, dir) {
+      const target = String(repo || '').trim()
+      const where = String(dir || '').trim()
+      if (!target) return
+      if (!where) {
+        set({ cloneNotice: { kind: 'error', text: '先填一个要绑定的文件夹' } })
+        return
+      }
+      set({ bindTarget: null })
+      try {
+        const payload = await fetchJson(ROUTE + '/clones/bind', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ repo: target, dir: where }),
+        })
+        set({
+          notice: '已绑定 ' + target + ' → ' + (payload.dir || where),
+          cloneTab: 'repos',
+          cloneNotice: null,
+        })
+        await loadClones(true)
+      } catch (error) {
+        set({ cloneNotice: { kind: 'error', text: messageOf(error) } })
+      }
+    }
+
+    async function unbindRepo(repo) {
+      if (!repo) return
+      try {
+        await fetchJson(ROUTE + '/clones/unbind', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ repo: repo }),
+        })
+        set({ notice: '已解绑 ' + repo + '（文件保留在原处）', cloneNotice: null })
         await loadClones(true)
       } catch (error) {
         set({ cloneNotice: { kind: 'error', text: messageOf(error) } })
@@ -3059,6 +3109,21 @@ window.__ModuleLoader__.load({
       const auto = current.cloneAuto || { enabled: true, minutes: 15 }
       const notice = current.cloneNotice
       const git = current.cloneGit
+      const cloneByRepo = {}
+      for (const clone of clones) cloneByRepo[clone.repo] = clone
+
+      function bindStatusText(clone) {
+        const behind = clone.behind || 0
+        const ahead = clone.ahead || 0
+        const parts = []
+        if (behind && ahead) parts.push('本地领先 ' + ahead + '、落后 ' + behind + '，需要手动合并')
+        else if (behind) parts.push('落后远端 ' + behind + ' 个提交，同步会拉取')
+        else if (ahead) parts.push('领先远端 ' + ahead + ' 个提交，同步会推送')
+        else parts.push('与远端一致')
+        if (clone.dirty) parts.push('有未提交改动')
+        if (clone.lastSync) parts.push('上次同步 ' + timeAgo(clone.lastSync))
+        return parts.join('；')
+      }
       const installedRepos = {}
       for (const skill of current.skills || []) {
         const repo = String((skill && skill.repo) || '').trim()
@@ -3082,7 +3147,10 @@ window.__ModuleLoader__.load({
               className: 'ghp-seg-btn' + (tab === pair[0] ? ' is-active' : ''),
               onClick: function () {
                 set({ cloneTab: pair[0] })
-                if (pair[0] === 'repos' && !state.repos) loadRepos()
+                if (pair[0] === 'repos') {
+                  loadClones(true)
+                  if (!state.repos) loadRepos()
+                }
                 if (pair[0] === 'stars' && !state.stars) loadStars()
               },
             },
@@ -3228,6 +3296,65 @@ window.__ModuleLoader__.load({
             )
           : null
 
+      const pendingBind = current.bindTarget
+      const bindCard =
+        pendingBind && pendingBind.repo
+          ? h(
+              'div',
+              { className: 'ghp-card ghp-clone-target' },
+              h(
+                'div',
+                { className: 'ghp-skill-head' },
+                h('strong', null, '绑定 ' + pendingBind.repo),
+                h(
+                  'span',
+                  { className: 'ghp-muted ghp-small' },
+                  '文件夹可以是空的、还不存在的（会克隆进去），或已经是这个仓库的本地检出',
+                ),
+              ),
+              h(
+                'div',
+                { className: 'ghp-form-row' },
+                h('input', {
+                  className: 'ghp-input',
+                  type: 'text',
+                  spellCheck: false,
+                  autoFocus: true,
+                  value: pendingBind.dir,
+                  placeholder: '例如 D:\\projects\\my-app',
+                  onChange: function (event) {
+                    set({ bindTarget: { repo: pendingBind.repo, dir: event.target.value } })
+                  },
+                  onKeyDown: function (event) {
+                    if (event.key === 'Enter') bindRepo(pendingBind.repo, pendingBind.dir)
+                    if (event.key === 'Escape') set({ bindTarget: null })
+                  },
+                }),
+                h(
+                  Button,
+                  {
+                    small: true,
+                    kind: 'primary',
+                    onClick: function () {
+                      bindRepo(pendingBind.repo, pendingBind.dir)
+                    },
+                  },
+                  '绑定',
+                ),
+                h(
+                  Button,
+                  {
+                    small: true,
+                    onClick: function () {
+                      set({ bindTarget: null })
+                    },
+                  },
+                  '取消',
+                ),
+              ),
+            )
+          : null
+
       function cloneRows() {
         return clones.map(function (clone) {
           const rowBusy = busy[clone.repo]
@@ -3305,6 +3432,8 @@ window.__ModuleLoader__.load({
         if (!rows || !rows.length) return h('div', { className: 'ghp-empty' }, emptyText)
         return rows.map(function (row) {
           const full = row.full_name
+          const bound = cloneByRepo[full]
+          const rowBusy = busy[full]
           return h(
             'div',
             { className: 'ghp-clone', key: full },
@@ -3314,10 +3443,51 @@ window.__ModuleLoader__.load({
               h('span', { className: 'ghp-clone-name' }, full),
               row.private ? h('span', { className: 'ghp-badge' }, '私有') : null,
               row.stargazers_count ? h('span', { className: 'ghp-muted ghp-small' }, '★ ' + row.stargazers_count) : null,
+              bound ? h('span', { className: 'ghp-badge ghp-badge-ok' }, '已绑定') : null,
               h('div', { className: 'ghp-toolbar-spacer' }),
-              cloneButton(full, { kind: 'primary' }),
+              bound
+                ? h(
+                    'div',
+                    { className: 'ghp-form-row' },
+                    h(
+                      Button,
+                      {
+                        small: true,
+                        kind: 'primary',
+                        disabled: !!rowBusy || !!state.projectBusy[full],
+                        onClick: function () {
+                          syncClone(full)
+                        },
+                      },
+                      rowBusy === 'syncing' ? '同步中…' : '同步',
+                    ),
+                    h(
+                      Button,
+                      {
+                        small: true,
+                        onClick: function () {
+                          unbindRepo(full)
+                        },
+                      },
+                      '解绑',
+                    ),
+                  )
+                : h(
+                    Button,
+                    {
+                      small: true,
+                      kind: 'primary',
+                      onClick: function () {
+                        set({ bindTarget: { repo: full, dir: '' }, cloneNotice: null })
+                      },
+                    },
+                    '绑定',
+                  ),
             ),
             row.description ? h('div', { className: 'ghp-muted ghp-small' }, row.description) : null,
+            bound ? h('div', { className: 'ghp-muted ghp-small ghp-mono' }, bound.dir) : null,
+            bound ? h('div', { className: 'ghp-muted ghp-small' }, bindStatusText(bound)) : null,
+            rowBusy === 'syncing' ? progressBar(full, { title: '正在同步' }) : null,
           )
         })
       }
@@ -3422,6 +3592,7 @@ window.__ModuleLoader__.load({
           : null,
         autoCard,
         targetCard,
+        bindCard,
         runningPanel,
         content,
         h(
