@@ -64,6 +64,7 @@ window.__ModuleLoader__.load({
       projectNotice: null,
       clones: null,
       cloneRoot: '',
+      cloneTarget: null,
       cloneGit: null,
       cloneAuto: { enabled: true, minutes: 15 },
       cloneTab: 'clones',
@@ -1408,19 +1409,28 @@ window.__ModuleLoader__.load({
       )
     }
 
-    async function cloneRepo(repo, ref) {
+    async function cloneRepo(repo, ref, dir) {
       const target = String(repo || '').trim()
+      const where = String(dir || '').trim()
       if (!target || state.cloneBusy[target]) return
       markCloneBusy(target, 'cloning')
-      set({ cloneNotice: null, actionError: null })
+      set({ cloneNotice: null, actionError: null, cloneTarget: null })
       try {
         const payload = await fetchJson(ROUTE + '/clones/clone', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ repo: target, ref: String(ref || state.cloneRef || '').trim() }),
+          body: JSON.stringify({
+            repo: target,
+            ref: String(ref || state.cloneRef || '').trim(),
+            dir: where,
+          }),
         })
         set({
-          notice: '已克隆 ' + target + (payload.branch ? '（' + payload.branch + '）' : ''),
+          notice:
+            '已克隆 ' +
+            target +
+            (payload.dir ? ' 到 ' + payload.dir : '') +
+            (payload.branch ? '（' + payload.branch + '）' : ''),
           cloneTab: 'clones',
         })
         await loadClones(true)
@@ -3033,9 +3043,9 @@ window.__ModuleLoader__.load({
           small: true,
           kind: opts.kind,
           disabled: !!busy || !!opts.disabled,
-          title: '克隆到本机 ' + repo,
+          title: '选择目录后克隆 ' + repo,
           onClick: function () {
-            cloneRepo(repo)
+            set({ cloneTarget: { repo: repo, dir: '' }, cloneNotice: null })
           },
         },
         opts.label || '克隆',
@@ -3132,7 +3142,7 @@ window.__ModuleLoader__.load({
           h(
             'label',
             { className: 'ghp-field' },
-            h('span', { className: 'ghp-field-label' }, '克隆目录'),
+            h('span', { className: 'ghp-field-label' }, '默认克隆目录'),
             h('input', {
               className: 'ghp-input',
               type: 'text',
@@ -3150,10 +3160,73 @@ window.__ModuleLoader__.load({
           h(
             'span',
             { className: 'ghp-muted ghp-small' },
-            '克隆落在该目录下的 owner/name；两台电脑可以各用各的目录',
+            '不单独指定时的默认位置；每个仓库克隆时可以另选',
           ),
         ),
       )
+
+      const pending = current.cloneTarget
+      const suggestedDir =
+        current.cloneRoot && pending && pending.repo
+          ? current.cloneRoot.replace(/[\\/]+$/, '') + '\\' + pending.repo.replace('/', '\\')
+          : ''
+      const targetCard =
+        pending && pending.repo
+          ? h(
+              'div',
+              { className: 'ghp-card ghp-clone-target' },
+              h(
+                'div',
+                { className: 'ghp-skill-head' },
+                h('strong', null, '克隆 ' + pending.repo),
+                h(
+                  'span',
+                  { className: 'ghp-muted ghp-small' },
+                  '每个仓库可以单独选目录；留空则用默认目录',
+                ),
+              ),
+              h(
+                'div',
+                { className: 'ghp-form-row' },
+                h('input', {
+                  className: 'ghp-input',
+                  type: 'text',
+                  spellCheck: false,
+                  autoFocus: true,
+                  value: pending.dir,
+                  placeholder: suggestedDir || '留空 = 默认目录',
+                  onChange: function (event) {
+                    set({ cloneTarget: { repo: pending.repo, dir: event.target.value } })
+                  },
+                  onKeyDown: function (event) {
+                    if (event.key === 'Enter') cloneRepo(pending.repo, '', pending.dir)
+                    if (event.key === 'Escape') set({ cloneTarget: null })
+                  },
+                }),
+                h(
+                  Button,
+                  {
+                    small: true,
+                    kind: 'primary',
+                    onClick: function () {
+                      cloneRepo(pending.repo, '', pending.dir)
+                    },
+                  },
+                  '开始克隆',
+                ),
+                h(
+                  Button,
+                  {
+                    small: true,
+                    onClick: function () {
+                      set({ cloneTarget: null })
+                    },
+                  },
+                  '取消',
+                ),
+              ),
+            )
+          : null
 
       function cloneRows() {
         return clones.map(function (clone) {
@@ -3348,14 +3421,15 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'ghp-error' }, '本机没有找到 git，请先安装 Git 并把它加入 PATH，克隆功能才能使用。')
           : null,
         autoCard,
+        targetCard,
         runningPanel,
         content,
         h(
           'p',
           { className: 'ghp-muted ghp-small' },
-          '克隆保存在本机 ' +
+          '每个克隆的目录见上面列表；没指定时落在 ' +
             (current.cloneRoot || '~/.dsh/github-clones') +
-            '；同步只做快进合并，检测到本地改动时会停下来，不会覆盖你的文件。也可以用工具 github_clone / github_clone_sync 让 AI 直接操作。',
+            '。同步只做快进合并，检测到本地改动时会停下来，不会覆盖你的文件。也可以用工具 github_clone（带 dir 参数）/ github_clone_sync 让 AI 直接操作。',
         ),
       )
 
