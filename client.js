@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
       reposError: null,
       repoQuery: '',
       repo: null,
-      tab: 'issues',
+      tab: 'commits',
       items: {},
       filters: { issues: 'open', pulls: 'open' },
       detail: null,
@@ -364,7 +364,7 @@ window.__ModuleLoader__.load({
       const parts = String(fullName).split('/')
       set({
         repo: { full: fullName, owner: parts[0], name: parts[1], data: null },
-        tab: 'issues',
+        tab: 'commits',
         detail: null,
         items: {},
         codePath: '',
@@ -374,7 +374,7 @@ window.__ModuleLoader__.load({
         codeEmpty: false,
         actionError: null,
       })
-      loadTab('issues')
+      loadTab('commits')
       try {
         const data = await apiCall('GET', '/repos/' + fullName)
         set(function (current) {
@@ -1518,13 +1518,26 @@ window.__ModuleLoader__.load({
         const payload = await fetchJson(ROUTE + '/clones/auto', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ enabled: next.enabled, minutes: next.minutes }),
+          body: JSON.stringify({ enabled: next.enabled, minutes: next.minutes, root: next.root }),
         })
-        set({ cloneAuto: payload.auto || next })
+        const saved = payload.auto || next
+        set({ cloneAuto: saved, cloneRoot: typeof saved.root === 'string' ? saved.root : state.cloneRoot })
       } catch (error) {
         set({ cloneNotice: { kind: 'error', text: messageOf(error) } })
         loadClones(true)
       }
+    }
+
+    async function setCloneRoot(value) {
+      const root = String(value || '').trim()
+      if (root === String(state.cloneRoot || '')) return
+      if (root && !/^([A-Za-z]:[\\/]|\\\\|\/|~[\\/])/.test(root)) {
+        set({ cloneNotice: { kind: 'error', text: '克隆目录要写绝对路径，例如 D:\\projects' } })
+        return
+      }
+      await setCloneAuto({ root: root })
+      await loadClones(true)
+      set({ notice: root ? '克隆目录已设为 ' + root : '克隆目录已恢复默认位置', cloneNotice: null })
     }
 
     async function searchRepos(quiet) {
@@ -2096,9 +2109,9 @@ window.__ModuleLoader__.load({
       const repo = current.repo
       const data = repo.data
       const tabs = [
+        ['commits', '提交'],
         ['issues', '议题'],
         ['pulls', '拉取请求'],
-        ['commits', '提交'],
         ['code', '代码'],
       ]
       return h(
@@ -2110,7 +2123,23 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'ghp-repo-head-text' },
-            h('div', { className: 'ghp-repo-title' }, repo.full),
+            h(
+              'div',
+              { className: 'ghp-repo-title-row' },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'ghp-back-btn',
+                  title: '返回仓库列表',
+                  onClick: function () {
+                    set({ repo: null, items: {}, detail: null, codeFile: null, codeEntries: null })
+                  },
+                },
+                '‹ 仓库',
+              ),
+              h('div', { className: 'ghp-repo-title' }, repo.full),
+            ),
             h(
               'div',
               { className: 'ghp-muted ghp-small' },
@@ -3097,6 +3126,33 @@ window.__ModuleLoader__.load({
             auto.enabled ? '每 ' + auto.minutes + ' 分钟检查一次' : '自动同步已暂停',
           ),
         ),
+        h(
+          'div',
+          { className: 'ghp-form-row' },
+          h(
+            'label',
+            { className: 'ghp-field' },
+            h('span', { className: 'ghp-field-label' }, '克隆目录'),
+            h('input', {
+              className: 'ghp-input',
+              type: 'text',
+              spellCheck: false,
+              defaultValue: current.cloneRoot || '',
+              placeholder: '留空 = ~/.dsh/github-clones',
+              onKeyDown: function (event) {
+                if (event.key === 'Enter') setCloneRoot(event.target.value)
+              },
+              onBlur: function (event) {
+                setCloneRoot(event.target.value)
+              },
+            }),
+          ),
+          h(
+            'span',
+            { className: 'ghp-muted ghp-small' },
+            '克隆落在该目录下的 owner/name；两台电脑可以各用各的目录',
+          ),
+        ),
       )
 
       function cloneRows() {
@@ -3588,8 +3644,41 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * Viewport width in CSS pixels, measured directly instead of trusted to a
+     * media query: inside a HarmonyOS WebView `(pointer: coarse)` is not
+     * guaranteed to match, so a purely media-query layout could stay in its
+     * two-column desktop shape on a phone. Below 768px the panel switches to
+     * the stacked, one-screen-at-a-time layout.
+     */
+    const NARROW_MAX = 768
+
+    function useNarrowViewport() {
+      const read = function () {
+        if (typeof window === 'undefined') return false
+        const width = window.innerWidth || 1024
+        return width < NARROW_MAX
+      }
+      const [narrow, setNarrow] = React.useState(read)
+      useEffect(function () {
+        if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined
+        const onResize = function () {
+          setNarrow(read())
+        }
+        window.addEventListener('resize', onResize)
+        window.addEventListener('orientationchange', onResize)
+        onResize()
+        return function () {
+          window.removeEventListener('resize', onResize)
+          window.removeEventListener('orientationchange', onResize)
+        }
+      }, [])
+      return narrow
+    }
+
     function GitHubPanel() {
       const current = useStore()
+      const narrow = useNarrowViewport()
       useEffect(function () {
         if (!current.booted) boot()
       }, [])
@@ -3696,12 +3785,20 @@ window.__ModuleLoader__.load({
       } else if (current.view === 'notifications') {
         body = h('div', { className: 'ghp-notif-pane' }, renderNotifications(current))
       } else {
-        body = h('div', { className: 'ghp-body' }, renderRepoList(current), h('main', { className: 'ghp-main' }, renderRepoMain(current)))
+        // Below 768px the two columns stop being side by side: the list becomes a
+        // full-width page and a repository opens over it, with a back control.
+        const compact = current.repo !== null
+        body = h(
+          'div',
+          { className: compact ? 'ghp-body ghp-body-detail' : 'ghp-body' },
+          renderRepoList(current),
+          h('main', { className: 'ghp-main' }, renderRepoMain(current)),
+        )
       }
 
       return h(
         'div',
-        { className: 'ghp-root' },
+        { className: narrow ? 'ghp-root ghp-narrow' : 'ghp-root' },
         h('style', null, CSS),
         header,
         current.actionError
@@ -3750,6 +3847,8 @@ window.__ModuleLoader__.load({
       '.ghp-repo-head{display:flex;align-items:flex-start;gap:12px}',
       '.ghp-repo-head-text{flex:1;min-width:0}',
       '.ghp-repo-title{font-size:15px;font-weight:600;word-break:break-all}',
+      '.ghp-repo-title-row{display:flex;align-items:center;gap:8px;min-width:0}',
+      '.ghp-back-btn{display:none;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:inherit;font:inherit;font-size:12px;padding:3px 9px;border-radius:8px;cursor:pointer;flex:0 0 auto}',
       '.ghp-tabs{display:flex;gap:2px;border-bottom:1px solid var(--dsw-alias-border-l1)}',
       '.ghp-tab{border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;padding:7px 12px;cursor:pointer;border-bottom:2px solid transparent}',
       '.ghp-tab.is-active{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-brand-primary)}',
@@ -3919,7 +4018,44 @@ window.__ModuleLoader__.load({
       '.ghp-cat-name{font-size:13px;font-weight:600}',
       '.ghp-subcat-group{display:flex;flex-direction:column;gap:6px}',
       '.ghp-subcat{font-size:11px;font-weight:600;color:var(--dsw-alias-label-secondary);letter-spacing:.02em}',
-    ].join('')
+          /* 手机档：由 JS 实测宽度加上的 .ghp-narrow（见 useNarrowViewport）。
+         不只依赖媒体查询——鸿蒙 WebView 里 (pointer: coarse) 未必匹配。
+         这两块必须放在 CSS 数组末尾，否则会被后面的同名基础规则整体覆盖。 */
+      '.ghp-narrow .ghp-header{flex-wrap:wrap;gap:8px;padding:8px 12px}',
+      '.ghp-narrow .ghp-nav{order:3;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}',
+      '.ghp-narrow .ghp-nav-btn{padding:7px 14px;font-size:13px}',
+      '.ghp-narrow .ghp-account{margin-left:auto}',
+      '.ghp-narrow .ghp-account-name{display:none}',
+      '.ghp-narrow .ghp-body{flex-direction:column;overflow:auto}',
+      '.ghp-narrow .ghp-side{width:100%;flex:1 1 auto;border-right:0;min-height:0}',
+      '.ghp-narrow .ghp-btn{padding:9px 14px;font-size:14px}',
+      '.ghp-narrow .ghp-btn-sm{padding:7px 12px;font-size:13px}',
+      '.ghp-narrow .ghp-tab{padding:11px 14px;font-size:14px}',
+      '.ghp-narrow .ghp-tabs{overflow-x:auto;-webkit-overflow-scrolling:touch}',
+      '.ghp-narrow .ghp-repo{padding:12px 10px}',
+      '.ghp-narrow .ghp-repo-name{font-size:14px}',
+      '.ghp-narrow .ghp-item{padding:13px 8px}',
+      '.ghp-narrow .ghp-input{padding:10px 12px;font-size:16px}',
+      '.ghp-narrow .ghp-main-inner{padding:12px 12px 28px}',
+      '.ghp-narrow .ghp-back-btn{display:inline-flex;align-items:center}',
+      '.ghp-narrow .ghp-repo-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;word-break:normal}',
+      '.ghp-narrow .ghp-repo-head{flex-direction:column;align-items:stretch;gap:8px}',
+      '.ghp-narrow .ghp-body-detail .ghp-side{display:none}',
+      '.ghp-narrow .ghp-body:not(.ghp-body-detail) .ghp-main{display:none}',
+      /* 兜底：没有 JS（或宽度判定失效）时，纯窄屏也按手机排。 */
+      '@media (max-width: 767px){',
+      '  .ghp-header{flex-wrap:wrap;gap:8px;padding:8px 12px}',
+      '  .ghp-nav{order:3;width:100%;overflow-x:auto}',
+      '  .ghp-account-name{display:none}',
+      '  .ghp-body{flex-direction:column;overflow:auto}',
+      '  .ghp-side{width:100%;flex:1 1 auto;border-right:0}',
+      '  .ghp-body-detail .ghp-side{display:none}',
+      '  .ghp-body:not(.ghp-body-detail) .ghp-main{display:none}',
+      '  .ghp-back-btn{display:inline-flex;align-items:center}',
+      '  .ghp-repo-head{flex-direction:column;align-items:stretch;gap:8px}',
+      '  .ghp-tabs{overflow-x:auto}',
+      '}',
+].join('')
 
     return {
       inject: ['slots'],

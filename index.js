@@ -163,18 +163,26 @@ function setup(ctx) {
     res.end(text)
   }
 
+  /**
+   * Same-origin admission. The carrier already authenticated the browser session
+   * and enforced its own trusted hosts, so this only has to prove the request was
+   * made by the page itself. Compare against the authority the browser actually
+   * addressed (`Host`), never against the loopback bind URL: behind a reverse
+   * proxy or tunnel the page's origin is the public one, and comparing to the
+   * bind address would reject every legitimate remote request.
+   */
   function sameOrigin(req) {
-    let origin
-    try {
-      origin = webServer.getOrigin()
-    } catch {
-      origin = undefined
-    }
-    const sent = req.headers.origin
-    if (typeof sent === 'string' && sent && origin && sent !== origin) return false
     const site = req.headers['sec-fetch-site']
-    if (!sent && typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
-    return true
+    if (typeof site === 'string' && site === 'cross-site') return false
+    const sent = req.headers.origin
+    if (typeof sent !== 'string' || sent === '') return true
+    const host = req.headers.host
+    if (typeof host !== 'string' || host === '') return false
+    try {
+      return new URL(sent).host === host
+    } catch {
+      return false
+    }
   }
 
   function readJsonBody(req) {
@@ -1029,7 +1037,10 @@ function setup(ctx) {
   const CLONE_STALL_MS = 180000
   const DEFAULT_AUTO_MINUTES = 15
 
+  let cloneRootOverride = ''
+
   function cloneRoot() {
+    if (cloneRootOverride) return cloneRootOverride
     return process.env.DSH_GITHUB_CLONE_DIR || path.join(dshHome(), 'github-clones')
   }
 
@@ -1039,6 +1050,63 @@ function setup(ctx) {
 
   function cloneDir(repo) {
     return path.join(cloneRoot(), ...repo.split('/'))
+  }
+
+  /** Where every clone actually lives, including ones outside the default root. */
+  function cloneIndexFile() {
+    return path.join(dshHome(), 'plugin-data', 'github-panel-clone-index.json')
+  }
+
+  async function readCloneIndex() {
+    try {
+      const parsed = JSON.parse(await fs.readFile(cloneIndexFile(), 'utf8'))
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  async function writeCloneIndex(next) {
+    const file = cloneIndexFile()
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, JSON.stringify(next, null, 2), 'utf8')
+  }
+
+  async function rememberClone(repo, dir) {
+    const index = await readCloneIndex()
+    index[repo] = dir
+    await writeCloneIndex(index)
+    return index
+  }
+
+  async function forgetClone(repo) {
+    const index = await readCloneIndex()
+    if (Object.prototype.hasOwnProperty.call(index, repo)) {
+      delete index[repo]
+      await writeCloneIndex(index)
+    }
+  }
+
+  /** Absolute directory of an existing clone: the recorded target wins over the default root. */
+  async function resolveCloneDir(repo) {
+    const index = await readCloneIndex()
+    const mapped = index[repo]
+    if (typeof mapped === 'string' && mapped.trim()) return path.resolve(mapped)
+    return cloneDir(repo)
+  }
+
+  /**
+   * Turn a requested target into the directory the repository itself occupies.
+   * A path ending in the repository name is used as-is; anything else is treated
+   * as the parent folder that receives a directory named after the repository.
+   */
+  function targetCloneDir(repo, requested) {
+    const want = String(requested || '').trim()
+    if (!want) return null
+    const repoName = String(repo).split('/')[1] || ''
+    const absolute = path.resolve(want)
+    const sameName = path.basename(absolute).toLowerCase() === repoName.toLowerCase()
+    return sameName ? absolute : path.join(absolute, repoName)
   }
 
   function cloneUrl(repo) {
@@ -1341,7 +1409,7 @@ function setup(ctx) {
     try {
       owners = await fs.readdir(root, { withFileTypes: true })
     } catch {
-      return []
+      owners = []
     }
     const out = []
     for (const owner of owners) {
@@ -1377,6 +1445,32 @@ function setup(ctx) {
         })
       }
     }
+    const indexed = await readCloneIndex()
+    const seen = new Set(out.map((item) => path.resolve(item.dir).toLowerCase()))
+    for (const repo of Object.keys(indexed)) {
+      if (!validRepo(repo)) continue
+      const dir = path.resolve(indexed[repo])
+      if (seen.has(dir.toLowerCase())) continue
+      const meta = await readCloneMeta(dir)
+      if (!meta) continue
+      const state = await cloneStatus(dir)
+      out.push({
+        repo,
+        dir,
+        branch: state.branch,
+        upstream: state.upstream,
+        behind: state.behind,
+        ahead: state.ahead,
+        dirty: state.dirty,
+        head: state.head,
+        url: meta.url || cloneUrl(repo),
+        ref: meta.ref || null,
+        clonedAt: meta.clonedAt || null,
+        lastSync: meta.lastSync || meta.clonedAt || null,
+        lastError: meta.lastError || null,
+        autoSync: meta.autoSync !== false,
+      })
+    }
     out.sort((a, b) => String(a.repo).toLowerCase().localeCompare(String(b.repo).toLowerCase()))
     return out
   }
@@ -1402,7 +1496,12 @@ function setup(ctx) {
     const ref = String(request_?.ref || '').trim()
     if (ref && !/^[A-Za-z0-9._\/-]+$/.test(ref)) throw new Error('分支名不合法')
     if (!(await gitInfo())) throw new Error('本机没有找到 git，请先安装 Git 并加入 PATH')
-    const dir = cloneDir(repo)
+    const wantsExplicit = String(request_?.dir || '').trim().length > 0
+    if (wantsExplicit && !path.isAbsolute(String(request_?.dir).trim())) {
+      throw new Error('目标文件夹要写绝对路径，例如 D:\\projects')
+    }
+    const requested = targetCloneDir(repo, request_?.dir)
+    const dir = requested || (await resolveCloneDir(repo))
     try {
       await fs.access(path.join(dir, '.git'))
       throw new Error(repo + ' 已经克隆过了')
@@ -1431,6 +1530,7 @@ function setup(ctx) {
     jobFinish(repo, { percent: 100, step: 100, label: '完成', detail: '完成' })
     const meta = {
       repo,
+      dir,
       url: cloneUrl(repo),
       ref: ref || state.branch || null,
       clonedAt: new Date().toISOString(),
@@ -1439,13 +1539,14 @@ function setup(ctx) {
       autoSync: true,
     }
     await writeCloneMeta(dir, meta)
+    await rememberClone(repo, dir)
     return { repo, dir, branch: state.branch, head: state.head, ref: meta.ref }
   }
 
   async function syncClone(token, repo) {
     const slug = String(repo || '').trim()
     if (!validRepo(slug)) throw new Error('仓库要写成 owner/name 的形式')
-    const dir = cloneDir(slug)
+    const dir = await resolveCloneDir(slug)
     const meta = await readCloneMeta(dir)
     if (!meta) throw new Error(slug + ' 还没有克隆到本机')
     jobSet(slug, { phase: 'sync', percent: 0, step: 0, label: '连接 GitHub', detail: '连接 GitHub', done: false, error: null, startedAt: Date.now() })
@@ -1501,16 +1602,22 @@ function setup(ctx) {
   async function removeClone(repo) {
     const slug = String(repo || '').trim()
     if (!validRepo(slug)) throw new Error('仓库要写成 owner/name 的形式')
-    const dir = cloneDir(slug)
+    const dir = await resolveCloneDir(slug)
     const root = path.resolve(cloneRoot())
-    if (!path.resolve(dir).startsWith(root + path.sep)) throw new Error('仓库路径不合法')
+    const index = await readCloneIndex()
+    const recorded = typeof index[slug] === 'string' ? path.resolve(index[slug]) : null
+    const underRoot = path.resolve(dir).startsWith(root + path.sep)
+    if (!underRoot && recorded !== path.resolve(dir)) throw new Error('仓库路径不合法')
     await fs.rm(dir, { recursive: true, force: true })
-    try {
-      const ownerDir = path.dirname(dir)
-      const rest = await fs.readdir(ownerDir)
-      if (rest.length === 0) await fs.rmdir(ownerDir)
-    } catch {
-      /* leave the owner directory alone */
+    await forgetClone(slug)
+    if (underRoot) {
+      try {
+        const ownerDir = path.dirname(dir)
+        const rest = await fs.readdir(ownerDir)
+        if (rest.length === 0) await fs.rmdir(ownerDir)
+      } catch {
+        /* leave the owner directory alone */
+      }
     }
     return { ok: true, repo: slug, dir }
   }
@@ -1522,12 +1629,15 @@ function setup(ctx) {
     try {
       const parsed = JSON.parse(await fs.readFile(cloneConfigFile(), 'utf8'))
       const minutes = Number(parsed?.minutes)
+      cloneRootOverride = typeof parsed?.root === 'string' ? parsed.root.trim() : ''
       autoConfig = {
         enabled: parsed?.enabled !== false,
         minutes: Number.isFinite(minutes) && minutes >= 1 ? Math.min(720, Math.round(minutes)) : DEFAULT_AUTO_MINUTES,
+        root: cloneRootOverride,
       }
     } catch {
-      autoConfig = { enabled: true, minutes: DEFAULT_AUTO_MINUTES }
+      cloneRootOverride = ''
+      autoConfig = { enabled: true, minutes: DEFAULT_AUTO_MINUTES, root: '' }
     }
     return autoConfig
   }
@@ -1913,6 +2023,13 @@ function setup(ctx) {
         }
         const next = {}
         if (typeof body?.enabled === 'boolean') next.enabled = body.enabled
+        if (body?.root !== undefined) {
+          const root = String(body.root || '').trim()
+          if (root && !path.isAbsolute(root)) {
+            return json(res, 400, { ok: false, error: '克隆目录要写绝对路径，例如 D:\\projects' })
+          }
+          next.root = root
+        }
         if (body?.minutes !== undefined) {
           const minutes = Number(body.minutes)
           if (!Number.isFinite(minutes) || minutes < 1 || minutes > 720) {
@@ -1922,6 +2039,7 @@ function setup(ctx) {
         }
         try {
           const auto = await saveAutoConfig(next)
+          cloneRootOverride = typeof auto.root === 'string' ? auto.root.trim() : ''
           scheduleAutoSync()
           return json(res, 200, { ok: true, auto })
         } catch (error) {
@@ -2062,8 +2180,8 @@ function setup(ctx) {
       {
         name: 'github_clone_list',
         description:
-          'List the repositories cloned to this machine (under ~/.dsh/github-clones), with branch, ' +
-          'commits behind the remote, and the last sync result.',
+          'List the repositories cloned to this machine, with the absolute directory of each clone, ' +
+          'branch, commits behind the remote, and the last sync result.',
         parameters: { type: 'object', properties: {}, additionalProperties: false },
         output: output({ type: 'array' }),
         execute: async () => listClones(),
@@ -2071,13 +2189,22 @@ function setup(ctx) {
       {
         name: 'github_clone',
         description:
-          'Clone a GitHub repository onto this machine under ~/.dsh/github-clones/owner/name, using the ' +
-          'connected token for private repositories. Clones are kept up to date by the auto-sync timer.',
+          'Clone a GitHub repository onto this machine. Pass dir to choose the folder: an absolute path ' +
+          'naming the repository is used as-is, any other absolute path is treated as the parent folder and ' +
+          'receives a directory named after the repository. Without dir the clone goes to ' +
+          '~/.dsh/github-clones/owner/name. The connected token is used for private repositories, and the ' +
+          'auto-sync timer keeps every clone up to date.',
         parameters: {
           type: 'object',
           properties: {
             repo: { type: 'string', description: 'owner/name' },
             ref: { type: 'string', description: 'Branch or tag to check out; default branch when omitted' },
+            dir: {
+              type: 'string',
+              description:
+                'Absolute target folder, e.g. D:\\\\projects\\\\my-app or D:\\\\projects (the repository name ' +
+                'is appended when the path does not already end with it)',
+            },
           },
           required: ['repo'],
           additionalProperties: false,

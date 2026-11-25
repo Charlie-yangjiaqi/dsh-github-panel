@@ -62,12 +62,14 @@ The host half registers eight tools, so the agent can drive GitHub, the clone ca
 | `github_skill_remove` | Remove an installed skill by name |
 | `github_skill_project` | `list`, `install` or `remove` a whole skill project (`repo`), with category, summary and keywords |
 | `github_clone_list` | List local clones with branch, upstream, ahead/behind and dirty state |
-| `github_clone` | Clone `owner/repo` (optionally a `ref`) into the clone root |
+| `github_clone` | Clone `owner/repo` (optionally a `ref` and a target `dir`) into the clone root or any absolute folder |
 | `github_clone_sync` | Fetch and fast-forward one clone, or `all: true` |
 
 ## Cloning
 
-Clones live in `$DSH_HOME/github-clones/<owner>/<repo>` (override with `DSH_GITHUB_CLONE_DIR`). Sync is fetch + `merge --ff-only`:
+Clones live in `$DSH_HOME/github-clones/<owner>/<repo>` by default. Choose a different place in the panel (自动同步 card → 克隆目录, saved in `plugin-data/github-panel-clones.json`), with `DSH_GITHUB_CLONE_DIR`, or per call through the `dir` argument of `github_clone`. An absolute path that already ends with the repository name is used as-is; any other absolute path is treated as the parent folder and receives a directory named after the repository. Every location is recorded in `$DSH_HOME/plugin-data/github-panel-clone-index.json`, so listing, syncing and removing still find clones that live outside the default root.
+
+Sync is fetch + `merge --ff-only`:
 
 - a clean clone follows the upstream branch automatically;
 - a clone with local changes is left alone and reported as *dirty*, so your edits are never overwritten;
@@ -147,7 +149,7 @@ dsh plugin --profile web add github:gpta76/dsh-github-panel
 ### 功能
 
 - **仓库**：列出你有权限的仓库，搜索、浏览目录、预览文件（300 KB 以内）。
-- **克隆**：从「我的仓库 / 星标 / 搜索」一键克隆到 `~/.dsh/github-clones`，显示实时进度条（整体百分比 + 当前 git 阶段）；作者更新后自动 fetch + 快进合并，本地有改动时停下不动你的文件；默认每 15 分钟检查一次，可关闭或改间隔。
+- **克隆**：从「我的仓库 / 星标 / 搜索」一键克隆到本机，默认 `~/.dsh/github-clones`，可在「已克隆」页的自动同步卡片里把「克隆目录」改成任意绝对路径（比如 `D:\projects`），也能让 AI 用 `github_clone` 的 `dir` 参数单次指定；显示实时进度条（整体百分比 + 当前 git 阶段）；作者更新后自动 fetch + 快进合并，本地有改动时停下不动你的文件；默认每 15 分钟检查一次，可关闭或改间隔。克隆位置记在 `~/.dsh/plugin-data/github-panel-clone-index.json`，因此列表、同步、删除都能找到默认目录之外的克隆。
 - **星标 / 关注 / 动态**：实时读自 GitHub，星标可一键取消。
 - **技能**：填 `owner/repo`（可加子目录与分支）把含 `SKILL.md` 的技能装进 `~/.dsh/skills`；也可以直接点克隆行上的「安装」，把整个仓库的技能一次性作为「项目」装进来。项目和技能都自动带中文简介、用途大类（漫剧 / 图像设计 / 视频音频 / 开发工具 / 文档办公 / 数据分析 / 自动化）+ 细分小类（如 漫剧 → 大纲改编 / 剧本台词 / 人物角色 / 美术场景 / 分镜镜头 / 站位调度），并写入 AI 检索关键词（`whenToUse`）。「检查更新」和每 15 分钟的自动同步会按上游最新提交重装，技能库不会落后；已安装的克隆行显示绿色「已安装」，不再重复出现安装按钮。
 - **通知**：未读列表、单条或全部标记已读、点击跳到对应议题/PR。
