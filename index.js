@@ -1578,6 +1578,22 @@ function setup(ctx) {
     }
   }
 
+  /** The manual 检查 button runs exactly what the timer runs: fetch, then refresh. */
+  async function checkAllClones() {
+    const token = await readToken().catch(() => undefined)
+    const clones = await listClones().catch(() => [])
+    const results = []
+    for (const clone of clones) {
+      if (!clone.autoSync) continue
+      try {
+        results.push(await checkClone(token, clone.repo))
+      } catch (error) {
+        results.push({ repo: clone.repo, failed: true, error: String(error?.message || error) })
+      }
+    }
+    return results
+  }
+
   async function syncClone(token, repo) {
     const slug = String(repo || '').trim()
     if (!validRepo(slug)) throw new Error('仓库要写成 owner/name 的形式')
@@ -2104,6 +2120,28 @@ function setup(ctx) {
         if (!sameOrigin(req)) return json(res, 403, { error: '来源不受信任' })
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
         return json(res, 200, { jobs: Array.from(gitJobs.values()) })
+      },
+    },
+    {
+      path: `${BASE}/clones/check`,
+      handler: async (req, res) => {
+        if (!sameOrigin(req)) return json(res, 403, { error: '来源不受信任' })
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+        let body = {}
+        try {
+          body = await readJsonBody(req)
+        } catch (error) {
+          return json(res, 400, { error: String(error.message || error) })
+        }
+        const token = await readToken().catch(() => undefined)
+        try {
+          if (body && typeof body.repo === 'string' && body.repo.trim()) {
+            return json(res, 200, { ok: true, results: [await checkClone(token, body.repo)] })
+          }
+          return json(res, 200, { ok: true, results: await checkAllClones() })
+        } catch (error) {
+          return json(res, 400, { ok: false, error: String(error?.message || error) })
+        }
       },
     },
     {

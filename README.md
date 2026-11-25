@@ -86,7 +86,7 @@ Clones made without binding still work: they land under `$DSH_HOME/github-clones
 
 Auto-sync runs every 15 minutes by default and can be switched off or re-timed in the panel. The panel shows a live progress bar while cloning or fetching.
 
-**The timer only checks.** Each run performs `fetch` and refreshes the ahead/behind numbers; it never pulls, never pushes, and never touches a file. A repository moves only when you press 同步. A failed fetch is shown on the row as 检查失败 rather than a misleading zero, and every row reports when it was last checked.
+**The timer only checks.** Each run performs `fetch` and refreshes the ahead/behind numbers; it never pulls, never pushes, and never touches a file. A repository moves only when you press 同步. A failed fetch is shown on the row as 检查失败 rather than a misleading zero, and every row reports when it was last checked. Press 检查 in the toolbar (or 立即检查 on the auto-check card) to run the same check right away instead of waiting for the timer.
 
 Git must be installed and on `PATH`. On Windows the panel runs git with `http.sslBackend=openssl`, which avoids the Schannel `SEC_E_NO_CREDENTIALS` failure some machines hit.
 
@@ -162,7 +162,7 @@ dsh plugin --profile web add github:gpta76/dsh-github-panel
 - **仓库**：列出你有权限的仓库，搜索、浏览目录、预览文件（300 KB 以内）。
 - **克隆 / 绑定**：在「我的仓库」里给每个仓库点「绑定」，选一个本地文件夹——空文件夹、还不存在的（会克隆进去）、或已经是这个仓库的检出都行，绑定前会校验远端地址。每个仓库各绑各的，不共用一个根目录；AI 也能用 `github_repo_bind` / `github_repo_unbind` 做同样的事。不绑定直接克隆也可以，落在默认 `~/.dsh/github-clones`（可在自动同步卡片里改「默认克隆目录」，或让 AI 用 `github_clone` 的 `dir` 指定）；克隆位置记在 `~/.dsh/plugin-data/github-panel-clone-index.json`。
 - **同步（双向）**：点「同步」先 fetch 再看方向——远端领先就 `merge --ff-only` 拉下来，本地领先就 `push` 推上去，两边都动过则报「分叉」不覆盖；本地未提交的改动只提示、不丢弃，推送的是已提交内容。
-- **定时器只检查**：默认每 15 分钟一次（可关、可改间隔），只执行 `fetch` 并刷新领先/落后，不拉取、不推送、不改任何文件；真正的移动只发生在你点「同步」时。fetch 失败会在该行显示「检查失败」而不是误导性的 0，每行还会显示上次检查时间。
+- **定时器只检查**：默认每 15 分钟一次（可关、可改间隔），只执行 `fetch` 并刷新领先/落后，不拉取、不推送、不改任何文件；真正的移动只发生在你点「同步」时。fetch 失败会在该行显示「检查失败」而不是误导性的 0，每行还会显示上次检查时间。不想等定时器时，点工具栏的「检查」（或自动检查卡片上的「立即检查」），做的事和定时器完全一样。
 - **星标 / 关注 / 动态**：实时读自 GitHub，星标可一键取消。
 - **技能**：填 `owner/repo`（可加子目录与分支）把含 `SKILL.md` 的技能装进 `~/.dsh/skills`；也可以直接点克隆行上的「安装」，把整个仓库的技能一次性作为「项目」装进来。项目和技能都自动带中文简介、用途大类（漫剧 / 图像设计 / 视频音频 / 开发工具 / 文档办公 / 数据分析 / 自动化）+ 细分小类（如 漫剧 → 大纲改编 / 剧本台词 / 人物角色 / 美术场景 / 分镜镜头 / 站位调度），并写入 AI 检索关键词（`whenToUse`）。「检查更新」和每 15 分钟的自动同步会按上游最新提交重装，技能库不会落后；已安装的克隆行显示绿色「已安装」，不再重复出现安装按钮。
 - **通知**：未读列表、单条或全部标记已读、点击跳到对应议题/PR。

@@ -66,6 +66,7 @@ window.__ModuleLoader__.load({
       cloneRoot: '',
       cloneTarget: null,
       bindTarget: null,
+      checking: null,
       cloneGit: null,
       cloneAuto: { enabled: true, minutes: 15 },
       cloneTab: 'clones',
@@ -1569,6 +1570,48 @@ window.__ModuleLoader__.load({
       } catch (error) {
         set({ cloneNotice: { kind: 'error', text: messageOf(error) } })
       }
+    }
+
+    async function checkClones(repo) {
+      const only = String(repo || '').trim()
+      if (state.checking) return
+      set({ checking: only || '*', cloneNotice: null })
+      try {
+        const payload = await fetchJson(ROUTE + '/clones/check', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(only ? { repo: only } : {}),
+        })
+        const rows = Array.isArray(payload.results) ? payload.results : []
+        const failed = rows.filter(function (row) {
+          return row && (row.failed || row.checkError)
+        })
+        await loadClones(true)
+        if (failed.length) {
+          set({
+            cloneNotice: {
+              kind: 'error',
+              text:
+                '检查了 ' + rows.length + ' 个仓库，' + failed.length + ' 个失败：' +
+                failed
+                  .map(function (row) {
+                    return row.repo
+                  })
+                  .join('、'),
+            },
+          })
+        } else {
+          set({
+            cloneNotice: {
+              kind: 'ok',
+              text: '已检查 ' + rows.length + ' 个仓库，领先/落后已是最新',
+            },
+          })
+        }
+      } catch (error) {
+        set({ cloneNotice: { kind: 'error', text: messageOf(error) } })
+      }
+      set({ checking: null })
     }
 
     async function setCloneAuto(patch) {
@@ -3170,8 +3213,21 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'ghp-skill-head' },
-          h('strong', null, '自动同步'),
+          h('strong', null, '自动检查'),
           h('span', { className: 'ghp-muted ghp-small' }, '定时 fetch 并刷新领先/落后；只检查，不动文件、不推送'),
+          h('div', { className: 'ghp-toolbar-spacer' }),
+          h(
+            Button,
+            {
+              small: true,
+              disabled: !!current.checking,
+              title: '立即执行一次检查',
+              onClick: function () {
+                checkClones()
+              },
+            },
+            current.checking ? '检查中…' : '立即检查',
+          ),
         ),
         h(
           'div',
@@ -3645,6 +3701,19 @@ window.__ModuleLoader__.load({
         subtitle: '绑定仓库到本地文件夹，随时看见领先与落后',
         toolbar: [
           tabBar,
+          h(
+            Button,
+            {
+              key: 'check',
+              small: true,
+              disabled: !!current.checking || clones.length === 0,
+              title: '和定时器做同样的事：fetch 后刷新领先/落后，不改动任何文件',
+              onClick: function () {
+                checkClones()
+              },
+            },
+            current.checking ? '检查中…' : '检查',
+          ),
           h(
             Button,
             {
