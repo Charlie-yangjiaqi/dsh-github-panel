@@ -3498,7 +3498,9 @@ window.__ModuleLoader__.load({
                   bindStatusText(bound),
                 )
               : null,
-            rowBusy === 'syncing' ? progressBar(full, { title: '正在同步' }) : null,
+            rowBusy === 'syncing' && !(current.cloneProgress[full] || {}).done
+              ? progressBar(full, { title: '正在同步' })
+              : null,
           )
         })
       }
@@ -3558,19 +3560,42 @@ window.__ModuleLoader__.load({
             )
       }
 
+      // A row renders its own progress bar, so the top panel only carries work that
+      // is not visible in the current list (otherwise the same sync shows twice).
+      const visibleRepos = {}
+      if (tab === 'clones') {
+        clones.forEach(function (clone) {
+          visibleRepos[clone.repo] = true
+        })
+      } else if (tab === 'repos') {
+        ;(current.repos || []).forEach(function (row) {
+          if (row && row.full_name) visibleRepos[row.full_name] = true
+        })
+      } else if (tab === 'stars') {
+        ;(current.stars || []).forEach(function (row) {
+          if (row && row.full_name) visibleRepos[row.full_name] = true
+        })
+      } else if (tab === 'search') {
+        ;(current.cloneResults || []).forEach(function (row) {
+          if (row && row.full_name) visibleRepos[row.full_name] = true
+        })
+      }
+
       const running = []
       Object.keys(busy).forEach(function (key) {
-        if (key !== '*' && busy[key] && running.indexOf(key) === -1) running.push(key)
+        if (key === '*' || !busy[key] || visibleRepos[key]) return
+        if (running.indexOf(key) === -1) running.push(key)
       })
       Object.keys(current.cloneProgress || {}).forEach(function (repo) {
-        if (!current.cloneProgress[repo].done && running.indexOf(repo) === -1) running.push(repo)
+        if (current.cloneProgress[repo].done || visibleRepos[repo]) return
+        if (running.indexOf(repo) === -1) running.push(repo)
       })
       const runningPanel =
         running.length && tab !== 'clones'
           ? h(
               'div',
               { className: 'ghp-card ghp-progress-panel' },
-              h('div', { className: 'ghp-progress-panel-title' }, '正在进行的克隆'),
+              h('div', { className: 'ghp-progress-panel-title' }, '后台任务'),
               running.map(function (repo) {
                 return progressBar(repo, { title: repo })
               }),
