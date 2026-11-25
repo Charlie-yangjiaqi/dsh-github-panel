@@ -1440,6 +1440,8 @@ function setup(ctx) {
           ref: meta.ref || null,
           clonedAt: meta.clonedAt || null,
           lastSync: meta.lastSync || meta.clonedAt || null,
+          lastCheck: meta.lastCheck || null,
+          checkError: meta.checkError || null,
           lastError: meta.lastError || null,
           autoSync: meta.autoSync !== false,
         })
@@ -1467,6 +1469,8 @@ function setup(ctx) {
         ref: meta.ref || null,
         clonedAt: meta.clonedAt || null,
         lastSync: meta.lastSync || meta.clonedAt || null,
+        lastCheck: meta.lastCheck || null,
+        checkError: meta.checkError || null,
         lastError: meta.lastError || null,
         autoSync: meta.autoSync !== false,
       })
@@ -1543,6 +1547,37 @@ function setup(ctx) {
     return { repo, dir, branch: state.branch, head: state.head, ref: meta.ref }
   }
 
+  /**
+   * Fetch the remote refs and refresh the ahead/behind numbers without touching
+   * the working tree. This is what the auto-sync timer calls, so a scheduled run
+   * never pulls, never pushes, and never changes a file on disk.
+   */
+  async function checkClone(token, repo) {
+    const slug = String(repo || '').trim()
+    if (!validRepo(slug)) throw new Error('仓库要写成 owner/name 的形式')
+    const dir = await resolveCloneDir(slug)
+    const meta = await readCloneMeta(dir)
+    if (!meta) throw new Error(slug + ' 还没有绑定到本机文件夹')
+    const fetch = await runGitWithRetry(
+      ['fetch', '--quiet', '--prune', '--tags', 'origin'],
+      { cwd: dir, token, timeout: 120000 },
+      slug,
+    )
+    meta.lastCheck = new Date().toISOString()
+    meta.checkError = fetch.code === 0 ? null : friendlyGitError(gitFailure(fetch))
+    await writeCloneMeta(dir, meta)
+    const state = await cloneStatus(dir)
+    return {
+      repo: slug,
+      dir,
+      behind: state.behind,
+      ahead: state.ahead,
+      dirty: state.dirty,
+      lastCheck: meta.lastCheck,
+      checkError: meta.checkError,
+    }
+  }
+
   async function syncClone(token, repo) {
     const slug = String(repo || '').trim()
     if (!validRepo(slug)) throw new Error('仓库要写成 owner/name 的形式')
@@ -1597,7 +1632,11 @@ function setup(ctx) {
       }
     }
     meta.lastSync = new Date().toISOString()
-    if (action === 'pulled' || action === 'pushed' || action === 'up-to-date') meta.lastError = null
+    meta.lastCheck = meta.lastSync
+    if (action === 'pulled' || action === 'pushed' || action === 'up-to-date') {
+      meta.lastError = null
+      meta.checkError = null
+    }
     await writeCloneMeta(dir, meta)
     const after = await cloneStatus(dir)
     jobFinish(slug, { percent: 100, step: 100, label: '完成', detail: '完成' })
@@ -1784,7 +1823,7 @@ function setup(ctx) {
     for (const clone of clones) {
       if (!clone.autoSync) continue
       try {
-        await syncClone(token, clone.repo)
+        await checkClone(token, clone.repo)
       } catch {
         /* per-clone failures stay in that clone's metadata */
       }

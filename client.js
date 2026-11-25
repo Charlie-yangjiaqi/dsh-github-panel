@@ -3116,12 +3116,17 @@ window.__ModuleLoader__.load({
         const behind = clone.behind || 0
         const ahead = clone.ahead || 0
         const parts = []
-        if (behind && ahead) parts.push('本地领先 ' + ahead + '、落后 ' + behind + '，需要手动合并')
-        else if (behind) parts.push('落后远端 ' + behind + ' 个提交，同步会拉取')
-        else if (ahead) parts.push('领先远端 ' + ahead + ' 个提交，同步会推送')
-        else parts.push('与远端一致')
-        if (clone.dirty) parts.push('有未提交改动')
-        if (clone.lastSync) parts.push('上次同步 ' + timeAgo(clone.lastSync))
+        if (clone.checkError) {
+          parts.push('检查失败：' + clone.checkError)
+        } else {
+          if (behind && ahead) parts.push('本地领先 ' + ahead + '、落后 ' + behind + '，需要手动合并')
+          else if (behind) parts.push('落后远端 ' + behind + ' 个提交，同步会拉取')
+          else if (ahead) parts.push('领先远端 ' + ahead + ' 个提交，同步会推送')
+          else parts.push('与远端一致')
+          if (clone.dirty) parts.push('有未提交改动')
+        }
+        if (clone.lastCheck) parts.push('上次检查 ' + timeAgo(clone.lastCheck))
+        else if (clone.lastSync) parts.push('上次同步 ' + timeAgo(clone.lastSync))
         return parts.join('；')
       }
       const installedRepos = {}
@@ -3166,7 +3171,7 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'ghp-skill-head' },
           h('strong', null, '自动同步'),
-          h('span', { className: 'ghp-muted ghp-small' }, '定时 fetch 并快进合并；作者一更新，本机克隆就跟上'),
+          h('span', { className: 'ghp-muted ghp-small' }, '定时 fetch 并刷新领先/落后；只检查，不动文件、不推送'),
         ),
         h(
           'div',
@@ -3185,7 +3190,7 @@ window.__ModuleLoader__.load({
           h(
             'label',
             { className: 'ghp-field ghp-field-narrow' },
-            h('span', { className: 'ghp-field-label' }, '间隔（分钟）'),
+            h('span', { className: 'ghp-field-label' }, '检查间隔（分钟）'),
             h('input', {
               className: 'ghp-input',
               type: 'number',
@@ -3201,7 +3206,7 @@ window.__ModuleLoader__.load({
           h(
             'span',
             { className: 'ghp-muted ghp-small' },
-            auto.enabled ? '每 ' + auto.minutes + ' 分钟检查一次' : '自动同步已暂停',
+            auto.enabled ? '每 ' + auto.minutes + ' 分钟检查一次' : '自动检查已暂停',
           ),
         ),
         h(
@@ -3486,7 +3491,13 @@ window.__ModuleLoader__.load({
             ),
             row.description ? h('div', { className: 'ghp-muted ghp-small' }, row.description) : null,
             bound ? h('div', { className: 'ghp-muted ghp-small ghp-mono' }, bound.dir) : null,
-            bound ? h('div', { className: 'ghp-muted ghp-small' }, bindStatusText(bound)) : null,
+            bound
+              ? h(
+                  'div',
+                  { className: bound.checkError ? 'ghp-error ghp-small' : 'ghp-muted ghp-small' },
+                  bindStatusText(bound),
+                )
+              : null,
             rowBusy === 'syncing' ? progressBar(full, { title: '正在同步' }) : null,
           )
         })
@@ -3598,15 +3609,15 @@ window.__ModuleLoader__.load({
         h(
           'p',
           { className: 'ghp-muted ghp-small' },
-          '每个克隆的目录见上面列表；没指定时落在 ' +
+          '定时器只做检查（fetch + 刷新领先/落后），不会拉取或推送；需要实际同步时点「同步」。没指定目录的克隆落在 ' +
             (current.cloneRoot || '~/.dsh/github-clones') +
-            '。同步只做快进合并，检测到本地改动时会停下来，不会覆盖你的文件。也可以用工具 github_clone（带 dir 参数）/ github_clone_sync 让 AI 直接操作。',
+            '。也可以用工具 github_clone（带 dir 参数）/ github_clone_sync 让 AI 直接操作。',
         ),
       )
 
       return pageFrame({
         title: '克隆',
-        subtitle: '下载仓库到本机，作者更新后自动同步，始终不落后',
+        subtitle: '绑定仓库到本地文件夹，随时看见领先与落后',
         toolbar: [
           tabBar,
           h(
