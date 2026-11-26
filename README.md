@@ -2,24 +2,27 @@
 
 A GitHub console for [DeepSeek Harness](https://github.com/deepseek-ai) that runs inside the app: paste a personal access token once and work with your repositories, issues, pull requests, commits, notifications, stars, cloning and skills without opening github.com.
 
+This fork adds **binding a repository to any local folder with two-way sync**, a **check-only background timer**, **clone targets chosen per repository**, and a **phone-friendly panel layout**. Upstream: [gpta76/dsh-github-panel](https://github.com/gpta76/dsh-github-panel).
+
 中文说明见下方 [中文](#中文).
 
 ## Features
 
 | Area | What you get |
 | --- | --- |
-| Repositories | List every repository you can access, search locally, browse the file tree and preview file contents |
+| Repositories | List every repository you can access, search locally, browse the file tree and preview file contents (up to 300 KB) |
 | Issues | Open/closed filter, create an issue, comment, close or reopen |
 | Pull requests | List, inspect, comment, merge |
-| Commits | Recent commits with author, message and time |
+| Commits | Recent commits with author, message and time (the first tab when you open a repository) |
 | Notifications | Unread threads, mark one or all as read, jump to the referenced issue/PR |
 | Stars | Everything you starred, with instant unstar, and searching |
 | Social | Who you follow, who follows you, your organizations |
 | Activity | Your public events and the events of the people you follow |
 | Clone | Clone a repo from your repositories, stars or search to disk, then keep it up to date automatically |
+| Bind + sync | Tie a repository to any local folder and sync both ways — pull when the remote is ahead, push when you are |
 | Skills | Install a whole GitHub skill project into `~/.dsh/skills`, grouped by category with Chinese descriptions and AI search keywords, and keep it in step with upstream |
 
-Data is read from the GitHub REST API on every refresh, so the panel and github.com never drift apart. A background refresh runs every 60 seconds while the panel is visible.
+Data is read from the GitHub REST API on every refresh, so the panel and github.com never drift apart. A background refresh runs every 60 seconds while the panel is visible, and is skipped while a detail view is open.
 
 ## Install
 
@@ -38,9 +41,11 @@ Restart DeepSeek Harness after installing, then open **GitHub** in the sidebar.
 ## Connect
 
 1. Create a token at <https://github.com/settings/tokens>.
+   - Fine-grained token (recommended): **Repository access → All repositories** (choosing *Public repositories* means private repositories never appear), then **Contents: Read**, **Issues: Read and write**, **Pull requests: Read and write**, **Releases: Read**. For the 通知 tab also add **Account → Notifications: Read**.
    - Classic token: `repo`, `read:user`, `notifications`.
-   - Fine-grained token: repository contents, issues and pull requests read/write, plus your profile.
 2. Paste it into the panel and press **连接** / **Connect**. The token is verified with `GET /user` before it is stored.
+
+Editing a fine-grained token's repository access or permissions only needs **Update** on that page — the token value stays the same, so an already-saved token keeps working. Only **Regenerate token** invalidates it.
 
 The panel lives in the web UI but every GitHub call is made by the host process, so no CORS proxy is involved and the token never enters the browser.
 
@@ -52,7 +57,7 @@ The panel does not share the token with anything else, and **断开** / **Discon
 
 ## Tools for the agent
 
-The host half registers eight tools, so the agent can drive GitHub, the clone cache and the skill library on its own:
+The host half registers ten tools, so the agent can drive GitHub, the clone cache and the skill library on its own:
 
 | Tool | Purpose |
 | --- | --- |
@@ -69,11 +74,19 @@ The host half registers eight tools, so the agent can drive GitHub, the clone ca
 
 ## Cloning
 
+Cloning puts a repository on disk. Three ways to choose where it lands:
+
+| Starting point | Where it goes |
+| --- | --- |
+| **我的仓库 → 绑定** | The folder you pick, for that repository only |
+| **克隆** with a chosen folder | That folder, recorded per repository |
+| **克隆** with no folder chosen | The default root: `$DSH_HOME/github-clones/<owner>/<repo>` |
+
+The default root is shown in the 自动同步 card as 默认克隆目录 and can be changed there, or with `DSH_GITHUB_CLONE_DIR`. Every location is recorded in `$DSH_HOME/plugin-data/github-panel-clone-index.json`, so listing, syncing and removing still find folders outside the default root.
+
 ## Binding a repository to a folder
 
 Open 我的仓库 and press 绑定 on a repository to tie it to a local folder. The folder may be empty, missing (it is cloned into), or an existing checkout of the same repository — the remote URL is verified before binding. Every repository keeps its own folder, so projects never share one root. `github_repo_bind` exposes the same action to the agent, and `github_repo_unbind` stops tracking a folder without deleting it.
-
-Clones made without binding still work: they land under `$DSH_HOME/github-clones/<owner>/<repo>` (change the default root in the 自动同步 card → 默认克隆目录 or with `DSH_GITHUB_CLONE_DIR`), or wherever the `dir` argument of `github_clone` points. Every location is recorded in `$DSH_HOME/plugin-data/github-panel-clone-index.json`, so listing, syncing and removing still find folders outside the default root.
 
 ## Two-way sync
 
@@ -84,17 +97,37 @@ Clones made without binding still work: they land under `$DSH_HOME/github-clones
 - both moved → reported as diverged, nothing is overwritten;
 - uncommitted local changes are reported but never discarded — only committed work is pushed.
 
-Auto-sync runs every 15 minutes by default and can be switched off or re-timed in the panel. The panel shows a live progress bar while cloning or fetching.
+The panel shows a live progress bar while cloning or fetching.
 
 **The timer only checks.** Each run performs `fetch` and refreshes the ahead/behind numbers; it never pulls, never pushes, and never touches a file. A repository moves only when you press 同步. A failed fetch is shown on the row as 检查失败 rather than a misleading zero, and every row reports when it was last checked. Press 检查 in the toolbar (or 立即检查 on the auto-check card) to run the same check right away instead of waiting for the timer.
 
+Auto-check runs every 15 minutes by default and can be switched off or re-timed in the panel.
+
+### Git transport on Windows
+
 Git must be installed and on `PATH`. On Windows the panel runs git with `http.sslBackend=openssl`, which avoids the Schannel `SEC_E_NO_CREDENTIALS` failure some machines hit.
+
+SSH remotes (`git@github.com:owner/repo`) and HTTPS remotes both work, but they fail differently. When GitHub's SSH endpoint is unreachable the error is `Connection reset by <ip> port 443` and every check on that row fails; switching the affected repositories to HTTPS remotes fixes it without touching global git settings:
+
+```bash
+git -C <repo> remote set-url origin https://github.com/owner/repo.git
+# keep the repository on HTTPS even when a global insteadOf rule rewrites it to SSH
+git -C <repo> config --local url."https://github.com/".insteadOf "https://github.com/"
+```
+
+The second command matters when `~/.gitconfig` contains `url.git@github.com:.insteadOf = https://github.com/`: without it the stored HTTPS URL is rewritten back to SSH at use time, and `git remote get-url` even reports the rewritten form — read `.git/config` directly to see what is actually stored.
+
+## Phone layout
+
+Below 768 px the panel stops showing the repository list and the repository detail side by side: only one of them is on screen, and opening a repository replaces the list with the detail plus a **‹ 仓库** back button. Touch targets grow (buttons, rows, tabs), the header navigation wraps, and text inputs are 16 px so iOS does not zoom the page when one gains focus.
+
+The narrow layout is triggered by a measured viewport width (`window.innerWidth < 768`), not by a media query alone, because inside a HarmonyOS WebView `(pointer: coarse)` is not guaranteed to match. A `@media (max-width: 767px)` block is kept as a fallback when the measurement cannot run.
 
 ## Skills library
 
 Cloning a repository does **not** install its skills: the agent only loads `~/.dsh/skills/<name>/SKILL.md`. The panel therefore has two separate actions:
 
-- **克隆** puts the repository on disk under `$DSH_HOME/github-clones`.
+- **克隆** puts the repository on disk under the clone root.
 - **安装** (on every clone row, or the install form in the *技能* view) pulls every `SKILL.md` of that repository into the skill catalog as one *project*.
 
 Each installed project and skill gets:
@@ -104,7 +137,7 @@ Each installed project and skill gets:
 - AI search keywords written into `whenToUse`, which is what the agent matches on when it looks for a skill;
 - an entry in `$DSH_HOME/plugin-data/github-panel-projects.json` plus a `.dsh-project.json` sidecar inside the skill directory.
 
-The *技能* view lists projects with their skills collapsed, and the installed-skills section grouped by category → sub-category. **检查更新** compares each installed project with its upstream commit and re-downloads the ones that moved; the 15-minute auto-sync does the same, so the catalog never lags behind the repository. Clones whose skills are already installed show a green *已安装* badge instead of the install button.
+The *技能* view lists projects with their skills collapsed, and the installed-skills section grouped by category → sub-category. **检查更新** compares each installed project with its upstream commit and re-downloads the ones that moved, so the catalog never lags behind the repository. Clones whose skills are already installed show a green *已安装* badge instead of the install button.
 
 ## Guest mode (invite code)
 
@@ -112,7 +145,7 @@ The connect card has a small *邀请码* link. Entering the owner's invite code 
 
 ## Security notes
 
-- Every host route checks the request origin, so other pages cannot drive the panel.
+- Every host route checks the request origin, so other pages cannot drive the panel. The check compares `Origin` against the `Host` the request actually arrived on, so the panel keeps working behind a reverse proxy or tunnel instead of only on the loopback address.
 - The RPC proxy only accepts paths that start with `/` and rejects absolute URLs, so it cannot be pointed at another host.
 - The token is only attached to api.github.com requests.
 - `npm` publishing is not required; the plugin is installed straight from this repository.
@@ -122,6 +155,7 @@ The connect card has a small *邀请码* link. Entering the owner's invite code 
 - One account per installation.
 - File preview is capped at 300 KB, clone progress at the phases git reports.
 - Merging uses the plain merge commit strategy; no rebase/squash choice yet.
+- A route whose registration collides with an older instance is skipped rather than re-added (intended for reloads). The collision is logged with its path — if a POST then answers a bare `405` with `Allow: GET, HEAD` and an empty body, that response came from the static fallback, not from this panel, and the log line names the route that failed to register.
 
 ## Development
 
@@ -135,6 +169,11 @@ cordis.patch.yml  bundle patch that inserts the plugin
 
 The client half is plain JavaScript loaded through `window.__ModuleLoader__`; both halves can be syntax-checked with `node --check`.
 
+Two ordering rules matter when editing the client:
+
+- The panel's CSS is one array joined into a single `<style>`. The phone rules must stay **after** the base rules; a phone block placed earlier loses to the base rules that follow it, because both have the same specificity and CSS resolves ties by order.
+- The page tab order and the default tab live in `client.js` (`const tabs = [...]` and `tab: 'commits'`). Opening a repository resets to 提交; clicking a notification still deep-links to the issue or pull request it names.
+
 ## License
 
 MIT
@@ -143,7 +182,9 @@ MIT
 
 ## 中文
 
-一个跑在 DeepSeek Harness 里的 GitHub 控制台：粘贴一次个人访问令牌，就能在应用内管理仓库、议题、拉取请求、提交、通知、星标，还能把仓库克隆到本机并自动保持最新、从 GitHub 安装技能。
+一个跑在 DeepSeek Harness 里的 GitHub 控制台：粘贴一次个人访问令牌，就能在应用内管理仓库、议题、拉取请求、提交、通知、星标，还能把仓库克隆到本机、绑定到自己的文件夹并双向同步、从 GitHub 安装技能。
+
+本分支在原作者 [gpta76/dsh-github-panel](https://github.com/gpta76/dsh-github-panel) 基础上增加了：**仓库绑定到任意本地文件夹并双向同步**、**只检查不动文件的定时器**、**每个仓库单独选克隆目录**、**手机端单屏布局**。
 
 ### 安装
 
@@ -155,27 +196,61 @@ dsh plugin --profile web add github:gpta76/dsh-github-panel
 
 ### 连接
 
-在 <https://github.com/settings/tokens> 生成令牌（经典令牌勾选 `repo`、`read:user`、`notifications`），粘贴进面板点「连接」。令牌只存在宿主进程的 `~/.dsh/plugin-data/github-panel.json`（权限 0600），不会进入浏览器，也不经过任何代理；点「断开」即删除。
+在 <https://github.com/settings/tokens> 生成令牌。
+
+细粒度令牌（推荐）：**Repository access 选 All repositories**（选「Public repositories」会永远看不到私有仓库），权限加 **Contents: Read**、**Issues: Read and write**、**Pull requests: Read and write**、**Releases: Read**；要「通知」页签再加 **Account → Notifications: Read**。
+
+经典令牌：勾 `repo`、`read:user`、`notifications`。
+
+粘贴进面板点「连接」。令牌只存在宿主进程的 `~/.dsh/plugin-data/github-panel.json`（权限 0600），不会进入浏览器，也不经过任何代理；点「断开」即删除。
+
+改细粒度令牌的仓库范围或权限，只需在那一页点 **Update**（Repository access 与 Permissions 各有一个），令牌值不变、已保存的照常可用；只有 **Regenerate token** 才会换值并作废旧令牌。
 
 ### 功能
 
-- **仓库**：列出你有权限的仓库，搜索、浏览目录、预览文件（300 KB 以内）。
-- **克隆 / 绑定**：在「我的仓库」里给每个仓库点「绑定」，选一个本地文件夹——空文件夹、还不存在的（会克隆进去）、或已经是这个仓库的检出都行，绑定前会校验远端地址。每个仓库各绑各的，不共用一个根目录；AI 也能用 `github_repo_bind` / `github_repo_unbind` 做同样的事。不绑定直接克隆也可以，落在默认 `~/.dsh/github-clones`（可在自动同步卡片里改「默认克隆目录」，或让 AI 用 `github_clone` 的 `dir` 指定）；克隆位置记在 `~/.dsh/plugin-data/github-panel-clone-index.json`。
+- **仓库**：列出你有权限的仓库，搜索、浏览目录、预览文件（300 KB 以内）。打开仓库默认停在「提交」页签。
+- **克隆**：落在哪由你决定——「我的仓库 → 绑定」选的那个文件夹、克隆时单独选的文件夹，或两者都没有时用默认根目录 `~/.dsh/github-clones`（可在自动同步卡片里改「默认克隆目录」，或设 `DSH_GITHUB_CLONE_DIR`）。所有位置记在 `~/.dsh/plugin-data/github-panel-clone-index.json`。
+- **绑定**：在「我的仓库」里给某个仓库点「绑定」，选一个本地文件夹——空文件夹、还不存在的（会克隆进去）、或已经是这个仓库的检出都行，绑定前会校验远端地址。每个仓库各绑各的，不共用一个根目录；AI 也能用 `github_repo_bind` / `github_repo_unbind` 做同样的事。
 - **同步（双向）**：点「同步」先 fetch 再看方向——远端领先就 `merge --ff-only` 拉下来，本地领先就 `push` 推上去，两边都动过则报「分叉」不覆盖；本地未提交的改动只提示、不丢弃，推送的是已提交内容。
 - **定时器只检查**：默认每 15 分钟一次（可关、可改间隔），只执行 `fetch` 并刷新领先/落后，不拉取、不推送、不改任何文件；真正的移动只发生在你点「同步」时。fetch 失败会在该行显示「检查失败」而不是误导性的 0，每行还会显示上次检查时间。不想等定时器时，点工具栏的「检查」（或自动检查卡片上的「立即检查」），做的事和定时器完全一样。
 - **星标 / 关注 / 动态**：实时读自 GitHub，星标可一键取消。
-- **技能**：填 `owner/repo`（可加子目录与分支）把含 `SKILL.md` 的技能装进 `~/.dsh/skills`；也可以直接点克隆行上的「安装」，把整个仓库的技能一次性作为「项目」装进来。项目和技能都自动带中文简介、用途大类（漫剧 / 图像设计 / 视频音频 / 开发工具 / 文档办公 / 数据分析 / 自动化）+ 细分小类（如 漫剧 → 大纲改编 / 剧本台词 / 人物角色 / 美术场景 / 分镜镜头 / 站位调度），并写入 AI 检索关键词（`whenToUse`）。「检查更新」和每 15 分钟的自动同步会按上游最新提交重装，技能库不会落后；已安装的克隆行显示绿色「已安装」，不再重复出现安装按钮。
+- **技能**：填 `owner/repo`（可加子目录与分支）把含 `SKILL.md` 的技能装进 `~/.dsh/skills`；也可以直接点克隆行上的「安装」，把整个仓库的技能一次性作为「项目」装进来。项目和技能都自动带中文简介、用途大类 + 细分小类，并写入 AI 检索关键词（`whenToUse`）。「检查更新」会按上游最新提交重装，技能库不会落后；已安装的克隆行显示绿色「已安装」。
 - **通知**：未读列表、单条或全部标记已读、点击跳到对应议题/PR。
 - **访客模式**：连接卡底部的「邀请码」可打开只读的公开数据视图（公开仓库、星标、动态），不需要令牌，也拿不到任何私有内容。
 
+### 手机端
+
+窄于 768 px 时不再左右分栏，列表和仓库详情一次只显示一个；点开仓库后详情盖住列表，并出现「‹ 仓库」返回键。按钮、行、页签都加大，顶栏导航换行，输入框字号 16 px（避免 iOS 聚焦时缩放整页）。
+
+窄屏判定用的是**实测宽度**（`window.innerWidth < 768`），不是纯媒体查询——鸿蒙 WebView 里 `(pointer: coarse)` 未必匹配。另保留一段 `@media (max-width: 767px)` 作为测不到宽度时的兜底。
+
+### Git 传输（Windows）
+
+需要本机装有 git 并在 `PATH` 上；Windows 上自动加 `http.sslBackend=openssl` 规避 Schannel 报错。
+
+SSH 与 HTTPS 远程都能用，但失败表现不同。GitHub 的 SSH 入口连不上时，错误是 `Connection reset by <ip> port 443`，相关行的每次检查都会失败；把受影响的仓库改成 HTTPS 远程即可，不必改动全局 git 配置：
+
+```bash
+git -C <仓库> remote set-url origin https://github.com/owner/repo.git
+# 若全局有 insteadOf 把 https 改写成 ssh，需要在仓库内抵消它
+git -C <仓库> config --local url."https://github.com/".insteadOf "https://github.com/"
+```
+
+第二条在 `~/.gitconfig` 含 `url.git@github.com:.insteadOf = https://github.com/` 时必须加：否则存着的 HTTPS 地址在使用时又被改写回 SSH，连 `git remote get-url` 都显示改写后的结果——要看真实存储值得直接看 `.git/config`。
+
 ### 给 AI 的工具
 
-`github_api`、`github_skill_list`、`github_skill_install`、`github_skill_remove`、`github_skill_project`、`github_clone_list`、`github_clone`、`github_repo_bind`、`github_repo_unbind`、`github_clone_sync`——AI 可以直接调用它们读接口、装技能项目、绑定文件夹、克隆与双向同步仓库。
+`github_api`、`github_skill_list`、`github_skill_install`、`github_skill_remove`、`github_skill_project`、`github_clone_list`、`github_clone`、`github_repo_bind`、`github_repo_unbind`、`github_clone_sync`——共 10 个，AI 可以直接调用它们读接口、装技能项目、绑定文件夹、克隆与双向同步仓库。
 
 ### 说明
 
-- 需要本机装有 git；Windows 上自动加 `http.sslBackend=openssl` 规避 Schannel 报错。
 - 一个安装对应一个 GitHub 账号。
 - 数据每次都实时请求 GitHub，不落库，所以永远和网页端一致。
+- 路由注册撞上旧实例时会被跳过而不是重复注册（为热重载设计），现在会打印带路径的警告。如果某个 POST 返回一个带 `Allow: GET, HEAD`、没有响应体的裸 `405`，那是静态兜底返回的，不是本面板——日志里那一行会指出是哪条路由没注册上。
+
+### 开发注意
+
+- 面板的 CSS 是一个数组拼成的单个 `<style>`。**手机端规则必须写在基础规则之后**：写在前面会被后面的同名基础规则覆盖（同权重时 CSS 按顺序取后者）。
+- 页签顺序与默认页签在 `client.js` 的 `const tabs = [...]` 和 `tab: 'commits'` 两处。打开仓库回到「提交」；从通知点进来仍然直达对应的议题或拉取请求。
 
 MIT 许可。
