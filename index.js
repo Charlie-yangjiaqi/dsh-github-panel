@@ -2295,9 +2295,16 @@ function setup(ctx) {
   for (const route of routes) {
     try {
       planned.push(webServer.register({ kind: 'exact', path: route.path, handler: route.handler }))
-    } catch {
+    } catch (error) {
       /* An older instance in this process already owns the path (hot reload without a
-         restart). Keep serving through it instead of failing the whole entry. */
+         restart). Keep serving through it instead of failing the whole entry — but do
+         not fail silently: a swallowed collision is invisible until a POST request
+         falls through to the static fallback and comes back as a bare 405. */
+      try {
+        console.warn('[github-panel] 路由注册被跳过（可能已有旧实例占用）:', route.path, String(error?.message || error))
+      } catch {
+        /* logging must never break activation */
+      }
     }
   }
 
